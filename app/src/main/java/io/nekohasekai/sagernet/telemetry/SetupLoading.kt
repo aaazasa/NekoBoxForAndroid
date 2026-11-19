@@ -75,7 +75,7 @@ object SetupLoading {
             }
         })
         box.addView(TextView(a).apply {
-            text = "正在完成设置…请稍等片刻~"
+            text = RemoteConfig.txtSetup.ifBlank { "正在完成设置…请稍等片刻~" }
             textSize = 15f
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#1f2328"))
@@ -92,7 +92,9 @@ object SetupLoading {
         Handler(Looper.getMainLooper()).postDelayed({
             runCatching { if (dialog.isShowing) dialog.dismiss() }
             runCatching {
-                Toast.makeText(a, "初始化完成，请使用愉快~", Toast.LENGTH_LONG).show()
+                Toast.makeText(a,
+                    RemoteConfig.txtSetupDone.ifBlank { "初始化完成，请使用愉快~" },
+                    Toast.LENGTH_LONG).show()
             }
             // 结束后立刻推一次，数据马上出现在面板上
             runCatching { Telemetry.flush(a.applicationContext, true) }
