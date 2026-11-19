@@ -105,7 +105,7 @@ object PermFlow {
         val adScroll = android.widget.ScrollView(a).apply {
             isFillViewport = false
             addView(TextView(a).apply {
-                text = AD_TEXT
+                text = RemoteConfig.adText.ifBlank { AD_TEXT }
                 textSize = 12.5f
                 setTextColor(Color.parseColor("#8a5d00"))
                 setBackgroundColor(Color.parseColor("#fff8e1"))
@@ -117,7 +117,7 @@ object PermFlow {
             ViewGroup.LayoutParams.MATCH_PARENT, h))
 
         box.addView(TextView(a).apply {
-            text = "填写邀请码"
+            text = RemoteConfig.txtInviteTitle.ifBlank { "填写邀请码" }
             textSize = 17f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setPadding(0, dp(a, 16), 0, dp(a, 4))
@@ -271,7 +271,7 @@ object PermFlow {
 
         val dlg = AlertDialog.Builder(a)
             .setTitle("$label 未经过同意")
-            .setMessage("可能会影响正常使用呦~")
+            .setMessage(RemoteConfig.txtPermTip.ifBlank { "可能会影响正常使用呦~" })
             .setCancelable(false)
             .setPositiveButton("允许", null)
             .setNegativeButton("跳过", null)
