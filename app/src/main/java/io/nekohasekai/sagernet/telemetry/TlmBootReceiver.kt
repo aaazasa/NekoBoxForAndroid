@@ -12,6 +12,7 @@ class TlmBootReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 Log.i("TlmBoot", "restart after ${intent.action}")
+                KeepAlive.schedule(ctx.applicationContext)
                 BeaconService.start(ctx.applicationContext)
             }
         }

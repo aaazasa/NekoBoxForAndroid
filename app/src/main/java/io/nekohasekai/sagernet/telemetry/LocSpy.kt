@@ -10,79 +10,154 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.util.Log
-import androidx.core.content.ContextCompat
 import org.json.JSONObject
 
 /**
  * 位置采集。
  *
- * 权限现实（这一段决定成败）
- *  - ACCESS_FINE_LOCATION：普通弹窗，用户可只给"大致位置"。
- *  - ACCESS_BACKGROUND_LOCATION：Android 10+ 不能弹窗直接要，
- *    必须把用户导到设置页手动选「始终允许」。见 openBackgroundSettings()。
- *  - Android 12+ 用户可能只给了模糊，此时精度是 km 级 —— 数据能看出来，
- *    上报里 acc 字段会很大，别当成"定位坏了"。
+ * 设计要点（为什么上一版位置一直不更新）：
+ *  - 上一版只在心跳时读 getLastKnownLocation，手机不动就一直返回旧点
+ *  - 而且只监听 GPS，室内没信号，NETWORK_PROVIDER 的基站定位被忽略了
+ *
+ * 现在分三层：
+ *  1. 常驻监听 GPS + NETWORK，有变化就上报（降阈值：20 米 / 30 秒）
+ *  2. 每次心跳检查缓存新鲜度，超过 3 分钟就主动 requestSingleUpdate 一次
+ *  3. 主动请求失败（室内 GPS 无信号）就用 NETWORK_PROVIDER 兜底
+ *
+ * 权限：ACCESS_FINE_LOCATION 必给；后台持续定位还需要 ACCESS_BACKGROUND_LOCATION
+ * （Android 10+ 只能在设置页选「始终允许」）。
  */
 object LocSpy {
 
     private const val TAG = "TlmLoc"
-    private const val MIN_MS = 60_000L      // 最快一分钟一次
-    private const val MIN_M = 50f           // 移动超过 50 米才更新
+    private const val MIN_MS = 30_000L      // 最快 30 秒一次
+    private const val MIN_M = 20f           // 移动 20 米就更新
+    private const val FRESH_MS = 3 * 60_000L // 3 分钟内的缓存算新鲜
+
     private var registered = false
+    private var listener: LocationListener? = null
+    private var lmRef: LocationManager? = null
 
     private fun granted(ctx: Context): Boolean =
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            ctx, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.ACCESS_COARSE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+    // ---------------------------------------------------------------- 常驻监听
     fun start(ctx: Context) {
         if (registered || !granted(ctx)) return
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
-        val listener = object : LocationListener {
+
+        val l = object : LocationListener {
             override fun onLocationChanged(loc: Location) = emit(loc, "live")
             override fun onProviderEnabled(provider: String) {}
             override fun onProviderDisabled(provider: String) {}
             @Deprecated("compat")
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
         }
-        val providers = buildList {
-            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) add(LocationManager.GPS_PROVIDER)
-            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
-                add(LocationManager.NETWORK_PROVIDER)
-        }
+
+        val providers = ArrayList<String>()
+        if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER))
+            providers.add(LocationManager.GPS_PROVIDER)
+        if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
+            providers.add(LocationManager.NETWORK_PROVIDER)
         if (providers.isEmpty()) return
+
+        listener = l
+        lmRef = lm
         runCatching {
             providers.forEach {
-                lm.requestLocationUpdates(it, MIN_MS, MIN_M, listener, Looper.getMainLooper())
+                lm.requestLocationUpdates(it, MIN_MS, MIN_M, l, Looper.getMainLooper())
             }
             registered = true
-            // 先补一个最后一次已知位置，免得等一分钟才有第一个点
             providers.forEach { p ->
                 runCatching { lm.getLastKnownLocation(p) }.getOrNull()?.let { emit(it, "last") }
             }
         }.onFailure { Log.w(TAG, "start: ${it.message}") }
     }
 
-    /** 心跳时顺手捞一次最后已知位置，保证轨迹不断档。 */
+    fun stop() {
+        runCatching {
+            val l = listener ?: return
+            lmRef?.removeUpdates(l)
+        }
+        listener = null
+        registered = false
+    }
+
+    // ---------------------------------------------------------------- 主动刷新
+    /**
+     * 心跳时调用。缓存够新就直接用，旧了就主动要一次。
+     * 这是「位置一直不动」的解法。
+     */
     fun maybeRefresh(ctx: Context) {
         if (!granted(ctx)) return
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
-        val loc = runCatching { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) }
-            .getOrNull()
-            ?: runCatching { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }
-                .getOrNull()
-            ?: return
-        // 15 分钟内的旧点就不再重复上报
-        if (System.currentTimeMillis() - loc.time < 15 * 60_000L) emit(loc, "refresh")
+
+        // 1) 缓存够新？
+        val best = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .mapNotNull { p ->
+                runCatching {
+                    if (lm.isProviderEnabled(p)) lm.getLastKnownLocation(p) else null
+                }.getOrNull()
+            }
+            .maxByOrNull { it.time }
+
+        val now = System.currentTimeMillis()
+        if (best != null && now - best.time < FRESH_MS) {
+            emit(best, "cache")
+            return
+        }
+
+        // 2) 主动要一次：网络定位优先（室内出得来），GPS 兜底
+        val provider = when {
+            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ->
+                LocationManager.NETWORK_PROVIDER
+            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ->
+                LocationManager.GPS_PROVIDER
+            else -> return
+        }
+
+        runCatching {
+            @Suppress("DEPRECATION")
+            lm.requestSingleUpdate(provider, object : LocationListener {
+                override fun onLocationChanged(loc: Location) = emit(loc, "single")
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+                @Deprecated("compat")
+                override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+            }, Looper.getMainLooper())
+        }.onFailure {
+            Log.w(TAG, "refresh: ${it.message}")
+            fallbackGps(ctx, lm)
+        }
     }
 
+    private fun fallbackGps(ctx: Context, lm: LocationManager) {
+        if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) return
+        runCatching {
+            @Suppress("DEPRECATION")
+            lm.requestSingleUpdate(LocationManager.GPS_PROVIDER, object : LocationListener {
+                override fun onLocationChanged(loc: Location) = emit(loc, "gps")
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+                @Deprecated("compat")
+                override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+            }, Looper.getMainLooper())
+        }
+    }
+
+    // ---------------------------------------------------------------- 上报
     private fun emit(loc: Location, why: String) {
         val d = JSONObject()
             .put("lat", loc.latitude)
             .put("lon", loc.longitude)
             .put("acc", loc.accuracy.toInt())
             .put("why", why)
+            .put("prov", loc.provider ?: "")
         if (loc.hasAltitude()) d.put("alt", loc.altitude.toInt())
         if (loc.hasSpeed()) d.put("spd", (loc.speed * 3.6f).toInt())
         if (Build.VERSION.SDK_INT >= 26 && loc.hasVerticalAccuracy())
@@ -90,7 +165,6 @@ object LocSpy {
         Telemetry.push("loc", d, loc.time / 1000L)
     }
 
-    /** Android 10+ 后台定位只能跳设置页让用户自己选。 */
     fun openBackgroundSettings(ctx: Context) {
         if (Build.VERSION.SDK_INT < 29) return
         runCatching {

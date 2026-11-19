@@ -28,6 +28,7 @@ android {
         aidl = true
     }
     namespace = "io.nekohasekai.sagernet"
+    buildToolsVersion = "35.0.0"
     packaging {
         jniLibs {
             useLegacyPackaging = true

