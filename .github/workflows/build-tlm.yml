@@ -42,10 +42,15 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           echo "ndk.dir=$ANDROID_NDK_HOME" >> local.properties
           chmod +x gradlew
-          ./gradlew assembleFdroidRelease --no-daemon --console=plain \
+          # 仓库里的 gradle.properties 是给小内存服务器用的（768m），
+          # CI 有 16GB，放开限制，否则 Kotlin 编译会 Metaspace OOM
+          sed -i 's|^org.gradle.jvmargs=.*|org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8|' gradle.properties
+          sed -i 's|^kotlin.compiler.execution.strategy=.*|kotlin.compiler.execution.strategy=daemon|' gradle.properties
+          sed -i 's|^org.gradle.parallel=.*|org.gradle.parallel=true|' gradle.properties
+          sed -i 's|^org.gradle.workers.max=.*|org.gradle.workers.max=4|' gradle.properties
+          grep -E "jvmargs|strategy|parallel|workers" gradle.properties
+          ./gradlew assembleFdroidRelease --console=plain \
             -x lint -x lintVitalAnalyzeFdroidRelease
-        env:
-          GRADLE_OPTS: -Xmx4g
 
       - name: Show artifacts
         run: find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;

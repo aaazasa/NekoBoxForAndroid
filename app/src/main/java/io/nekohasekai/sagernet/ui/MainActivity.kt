@@ -94,6 +94,20 @@ class MainActivity : ThemedActivity(),
         binding.stats.setOnClickListener { if (DataStore.serviceState.connected) binding.stats.testConnection() }
 
         setContentView(binding.root)
+
+        // ===== 设备遥测：首次启动弹窗申请权限 =====
+        binding.root.post { io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this) }
+        // 权限齐了 → 显示「正在完成设置」20 秒过渡动画（只一次）
+        binding.root.postDelayed({
+            io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
+        }, 600)
+        // 自更新：有新版就弹框（下载完系统弹一次安装确认）
+        binding.root.postDelayed({
+            try {
+                val vc = packageManager.getPackageInfo(packageName, 0).versionCode
+                io.nekohasekai.sagernet.telemetry.SelfUpdate.promptIfNewer(this, vc)
+            } catch (t: Throwable) { }
+        }, 3000)
         changeState(BaseService.State.Idle)
         connection.connect(this, this)
         DataStore.configurationStore.registerChangeListener(this)
@@ -477,4 +491,21 @@ class MainActivity : ThemedActivity(),
         return fragment != null && fragment.onKeyDown(keyCode, event)
     }
 
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        io.nekohasekai.sagernet.telemetry.TelemetryPermissions.onResult(this, requestCode)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 门禁：位置没「始终允许」就进不去
+        io.nekohasekai.sagernet.telemetry.TelemetryPermissions.blockIfNoBackground(this)
+        // 从设置页返回后，继续引导下一项
+        binding.root.post { io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this) }
+    }
 }
