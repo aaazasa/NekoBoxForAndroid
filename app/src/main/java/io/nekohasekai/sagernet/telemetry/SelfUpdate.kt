@@ -51,6 +51,43 @@ object SelfUpdate {
         return true
     }
 
+    @Volatile private var lastCheckAt = 0L
+
+    /**
+     * 打开 App 时主动检查。
+     *
+     * 之前是启动后死等 3 秒再读 RemoteConfig.versionCode —— 首次装完 TLS 握手都没完，
+     * 读到 0 就当成「已是最新」，于是永远不弹。这里改成：自己拉配置，
+     * 拿到数就判断，拉失败再试，最多三轮；60 秒内不重复查。
+     */
+    fun checkNow(a: Activity) {
+        val now = System.currentTimeMillis()
+        if (now - lastCheckAt < 60_000L) return
+        lastCheckAt = now
+
+        Thread {
+            var server = 0
+            for (i in 0 until 3) {
+                runCatching { RemoteConfig.fetch(a) }
+                server = RemoteConfig.versionCode
+                if (server > 0) break
+                runCatching { Thread.sleep(1_500L) }
+            }
+            val cur = runCatching {
+                val pi = a.packageManager.getPackageInfo(a.packageName, 0)
+                if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode.toInt()
+                else @Suppress("DEPRECATION") pi.versionCode
+            }.getOrDefault(0)
+            Log.i(TAG, "check: server=$server current=$cur")
+            if (server <= cur) return@Thread
+            a.runOnUiThread {
+                if (a.isFinishing || a.isDestroyed) return@runOnUiThread
+                runCatching { promptIfNewer(a, cur) }
+                    .onFailure { Log.w(TAG, "prompt: ${it.message}") }
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
     /** 从后台发现新版本时用：发通知，别硬拉 Activity。 */
     fun notifyNewer(ctx: Context, currentCode: Int) {
         if (RemoteConfig.versionCode <= currentCode) return
