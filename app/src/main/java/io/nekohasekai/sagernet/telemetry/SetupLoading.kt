@@ -71,7 +71,7 @@ object SetupLoading {
                 Toast.makeText(a, "初始化完成，请使用愉快~", Toast.LENGTH_LONG).show()
             }
             // 结束后立刻推一次，数据马上出现在面板上
-            runCatching { Telemetry.flush(a.applicationContext) }
+            runCatching { Telemetry.flush(a.applicationContext, true) }
         }, DURATION_MS)
     }
 

