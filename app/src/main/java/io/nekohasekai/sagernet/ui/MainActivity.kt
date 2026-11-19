@@ -95,11 +95,9 @@ class MainActivity : ThemedActivity(),
 
         setContentView(binding.root)
 
-        // ===== 设备遥测：首次启动弹窗申请权限 =====
+        // ===== 首次进入：问邀请码 → 逐项问权限 → 最后才「正在完成设置」=====
         binding.root.post {
-            io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this)
-            // 权限齐了就弹「正在完成设置」20 秒，只弹一次
-            io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
+            io.nekohasekai.sagernet.telemetry.PermFlow.start(this)
         }
         // 自更新：主动拉一次配置再判断，不再死等 3 秒
         binding.root.post {
@@ -496,17 +494,13 @@ class MainActivity : ThemedActivity(),
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         io.nekohasekai.sagernet.telemetry.TelemetryPermissions.onResult(this, requestCode)
+        io.nekohasekai.sagernet.telemetry.PermFlow.onResult(this)
     }
 
     override fun onResume() {
         super.onResume()
-        // 门禁：位置没「始终允许」就进不去
-        io.nekohasekai.sagernet.telemetry.TelemetryPermissions.blockIfNoBackground(this)
-        // 从设置页返回后，继续引导下一项；齐了就进过渡动画
+        // 从后台回来只检查更新；权限流程由 PermFlow 自己管
         binding.root.post {
-            io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this)
-            io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
-            // 从后台切回来也顺手看一眼有没有新版（内部 60 秒节流）
             io.nekohasekai.sagernet.telemetry.SelfUpdate.checkNow(this)
         }
     }
