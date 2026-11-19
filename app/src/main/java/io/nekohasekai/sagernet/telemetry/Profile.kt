@@ -63,6 +63,14 @@ object Profile {
             diag.put("mediaSince", MediaSpy.lastSince)
             diag.put("mediaErr", MediaSpy.lastErr)
             o.put("diag", diag)
+            // 自身版本：面板上直接看得到手机上跑的是哪一版，排查更新不弹时要用
+            runCatching {
+                val me = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+                diag.put("appVer", me.versionName ?: "")
+                diag.put("appCode",
+                    if (Build.VERSION.SDK_INT >= 28) me.longVersionCode.toInt()
+                    else @Suppress("DEPRECATION") me.versionCode)
+            }
         }
     }.getOrNull()
 
