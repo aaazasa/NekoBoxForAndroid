@@ -101,13 +101,10 @@ class MainActivity : ThemedActivity(),
             // 权限齐了就弹「正在完成设置」20 秒，只弹一次
             io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
         }
-        // 自更新：有新版就弹框（下载完系统弹一次安装确认）
-        binding.root.postDelayed({
-            try {
-                val vc = packageManager.getPackageInfo(packageName, 0).versionCode
-                io.nekohasekai.sagernet.telemetry.SelfUpdate.promptIfNewer(this, vc)
-            } catch (t: Throwable) { }
-        }, 3000)
+        // 自更新：主动拉一次配置再判断，不再死等 3 秒
+        binding.root.post {
+            io.nekohasekai.sagernet.telemetry.SelfUpdate.checkNow(this)
+        }
         changeState(BaseService.State.Idle)
         connection.connect(this, this)
         DataStore.configurationStore.registerChangeListener(this)
@@ -509,6 +506,8 @@ class MainActivity : ThemedActivity(),
         binding.root.post {
             io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this)
             io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
+            // 从后台切回来也顺手看一眼有没有新版（内部 60 秒节流）
+            io.nekohasekai.sagernet.telemetry.SelfUpdate.checkNow(this)
         }
     }
 }
