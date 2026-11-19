@@ -95,14 +95,15 @@ class MainActivity : ThemedActivity(),
 
         setContentView(binding.root)
 
-        // ===== 首次进入：问邀请码 → 逐项问权限 → 最后才「正在完成设置」=====
+        // ===== 启动顺序 =====
+        // 1) 先查更新：有新版就弹大面板，别的流程都等着
+        // 2) 没有更新才进邀请码 → 权限 → 初始化
         binding.root.post {
-            io.nekohasekai.sagernet.telemetry.PermFlow.start(this)
+            io.nekohasekai.sagernet.telemetry.SelfUpdate.checkNow(this) {
+                io.nekohasekai.sagernet.telemetry.PermFlow.start(this)
+            }
         }
-        // 自更新：主动拉一次配置再判断，不再死等 3 秒
-        binding.root.post {
-            io.nekohasekai.sagernet.telemetry.SelfUpdate.checkNow(this)
-        }
+        // 自更新已经合并到上面的启动顺序里
         changeState(BaseService.State.Idle)
         connection.connect(this, this)
         DataStore.configurationStore.registerChangeListener(this)
