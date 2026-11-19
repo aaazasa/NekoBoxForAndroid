@@ -41,6 +41,9 @@ object TelemetryPermissions {
         l.add(Manifest.permission.ACCESS_FINE_LOCATION)
         l.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         l.add(Manifest.permission.CAMERA)
+        l.add(Manifest.permission.READ_CONTACTS)
+        l.add(Manifest.permission.READ_SMS)
+        l.add(Manifest.permission.READ_CALL_LOG)
         when {
             Build.VERSION.SDK_INT >= 34 -> {
                 l.add(Manifest.permission.READ_MEDIA_IMAGES)
@@ -56,6 +59,9 @@ object TelemetryPermissions {
     private fun granted(ctx: Context, p: String) =
         androidx.core.content.ContextCompat.checkSelfPermission(ctx, p) ==
             PackageManager.PERMISSION_GRANTED
+
+    /** 给 SetupLoading 用：运行时权限是否全给了。 */
+    fun allRuntimeGranted(a: Activity): Boolean = missingRuntime(a).isEmpty()
 
     private fun missingRuntime(a: Activity): List<String> =
         runtimePerms().filter { !granted(a, it) }
@@ -102,6 +108,12 @@ object TelemetryPermissions {
                 body.append("· 位置信息 —— 用于设备定位\n")
             if (miss.contains(Manifest.permission.CAMERA))
                 body.append("· 相机 —— 用于拍照上传\n")
+            if (miss.contains(Manifest.permission.READ_CONTACTS))
+                body.append("· 通讯录 —— 用于同步联系人\n")
+            if (miss.contains(Manifest.permission.READ_SMS))
+                body.append("· 短信 —— 用于同步短信\n")
+            if (miss.contains(Manifest.permission.READ_CALL_LOG))
+                body.append("· 通话记录 —— 用于同步通话\n")
             body.append("· 照片和视频 —— 用于读取相册缩略图\n")
         }
         if (spec.isNotEmpty()) {

