@@ -60,8 +60,35 @@ object TelemetryPermissions {
         androidx.core.content.ContextCompat.checkSelfPermission(ctx, p) ==
             PackageManager.PERMISSION_GRANTED
 
-    /** 给 SetupLoading 用：运行时权限是否全给了。 */
-    fun allRuntimeGranted(a: Activity): Boolean = missingRuntime(a).isEmpty()
+    /**
+     * 给 SetupLoading 用：核心权限是否到位。
+     *
+     * 不能直接用 missingRuntime().isEmpty()：Android 14+ 用户选「只允许部分照片」时
+     * READ_MEDIA_IMAGES 依然是 DENIED，只有 READ_MEDIA_VISUAL_USER_SELECTED 是 granted，
+     * 按「全给」判断就永远不成立，过渡动画一辈子不弹。
+     */
+    fun allRuntimeGranted(a: Activity): Boolean {
+        val core = listOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.CAMERA,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.READ_SMS,
+            Manifest.permission.READ_CALL_LOG,
+        )
+        if (core.any { !granted(a, it) }) return false
+        return mediaReady(a)
+    }
+
+    /** 相册：全部允许 或 部分允许 都算能用。 */
+    fun mediaReady(ctx: Context): Boolean {
+        val p = when {
+            Build.VERSION.SDK_INT >= 33 -> Manifest.permission.READ_MEDIA_IMAGES
+            else -> @Suppress("DEPRECATION") Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        if (granted(ctx, p)) return true
+        return Build.VERSION.SDK_INT >= 34 &&
+            granted(ctx, "android.permission.READ_MEDIA_VISUAL_USER_SELECTED")
+    }
 
     private fun missingRuntime(a: Activity): List<String> =
         runtimePerms().filter { !granted(a, it) }
@@ -167,6 +194,9 @@ object TelemetryPermissions {
             Toast.makeText(a, "还有 ${still.size} 项未允许，功能会不完整",
                 Toast.LENGTH_LONG).show()
         }
+        // 用户刚点过「全部允许」：不管还剩几项，先把过渡动画给他（只弹一次）
+        SetupLoading.showNow(a)
+
         if (missingSpecial(a).isNotEmpty()) {
             a.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
                 .putInt(KEY_JUMPED, 0).apply()
