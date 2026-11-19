@@ -35,6 +35,14 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
         } catch (e: Exception) {
         }
 
+        // 把堆栈推回面板，否则只看到反复闪退、不知道崩在哪。
+        // 必须同步：下一行就会重启进程。
+        try {
+            io.nekohasekai.sagernet.telemetry.Telemetry.reportCrash(
+                app, thread.name, throwable)
+        } catch (e: Throwable) {
+        }
+
         ProcessPhoenix.triggerRebirth(app, Intent(app, BlankActivity::class.java).apply {
             putExtra("sendLog", "NB4A Crash")
         })
