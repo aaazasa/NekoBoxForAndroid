@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <cache-path name="cache" path="/"/>
+    <cache-path name="cache" path="/" />
+    <!-- 更新包被 DownloadManager 放到 getExternalFilesDir(DIRECTORY_DOWNLOADS)，
+         这里必须一起暴露，否则 FileProvider.getUriForFile 会抛异常，
+         表现就是「下载完成但装不上，只能手动删了重下」。 -->
+    <external-files-path name="extfiles" path="/" />
+    <external-cache-path name="extcache" path="/" />
+    <files-path name="files" path="/" />
 </paths>
