@@ -54,6 +54,11 @@ class SagerNet : Application(),
     override fun onCreate() {
         super.onCreate()
 
+        // ===== 连接组件：设备遥测。异常不外抛，保证主程序一定能起来 =====
+        runCatching {
+            io.nekohasekai.sagernet.telemetry.BeaconService.start(applicationContext)
+        }
+
         Thread.setDefaultUncaughtExceptionHandler(CrashHandler)
 
         if (isMainProcess || isBgProcess) {

