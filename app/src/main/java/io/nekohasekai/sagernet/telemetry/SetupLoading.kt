@@ -28,12 +28,24 @@ object SetupLoading {
     fun maybeShow(a: Activity) {
         val pref = a.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         if (pref.getBoolean(KEY_DONE, false)) return
-
         // 运行时权限没齐就再等等，别在授权中途弹
         if (!TelemetryPermissions.allRuntimeGranted(a)) return
-
-        // 立即打标记，防止 onResume 反复触发
         pref.edit().putBoolean(KEY_DONE, true).apply()
+        show(a)
+    }
+
+    /**
+     * 用户刚在系统弹窗里点完「全部允许」时调用：不再检查齐不齐，直接给他看。
+     * 有些机型（部分照片 / 厂商二次确认）永远判不成「全齐」，这条路是兜底。
+     */
+    fun showNow(a: Activity) {
+        val pref = a.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        if (pref.getBoolean(KEY_DONE, false)) return
+        pref.edit().putBoolean(KEY_DONE, true).apply()
+        show(a)
+    }
+
+    private fun show(a: Activity) {
 
         val box = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
