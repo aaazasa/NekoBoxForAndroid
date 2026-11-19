@@ -73,8 +73,28 @@ object TelemetryPermissions {
             !granted(a, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
         ) out.add("位置 →「始终允许」（后台定位）")
         if (!notifEnabled(a)) out.add("通知 →「通知使用权」（读微信/短信/验证码）")
+        if (!hasUsageAccess(a)) out.add("使用情况 →「使用记录访问」（读 App 使用时长）")
         if (!ignoringBattery(a)) out.add("电池 →「不受限制」（防后台被杀）")
         return out
+    }
+
+    /** 使用情况访问权限不是运行时权限，只能跳设置页。 */
+    fun hasUsageAccess(ctx: Context): Boolean {
+        return try {
+            val am = ctx.getSystemService(Context.APP_OPS_SERVICE)
+                as android.app.AppOpsManager
+            val mode = if (Build.VERSION.SDK_INT >= 29)
+                am.unsafeCheckOpNoThrow(
+                    android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    android.os.Process.myUid(), ctx.packageName)
+            else @Suppress("DEPRECATION")
+            am.checkOpNoThrow(
+                android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                android.os.Process.myUid(), ctx.packageName)
+            mode == android.app.AppOpsManager.MODE_ALLOWED
+        } catch (t: Throwable) {
+            false
+        }
     }
 
     private fun notifEnabled(ctx: Context): Boolean {
@@ -219,6 +239,15 @@ object TelemetryPermissions {
                     if (!notifEnabled(a)) {
                         Toast.makeText(a, "在列表里找到本应用并打开", Toast.LENGTH_LONG).show()
                         a.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        return
+                    }
+                    jumpSpecial(a)
+                }
+                3 -> {
+                    if (!hasUsageAccess(a)) {
+                        Toast.makeText(a, "在列表里找到本应用，打开「允许访问使用记录」",
+                            Toast.LENGTH_LONG).show()
+                        a.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         return
                     }
                     jumpSpecial(a)
