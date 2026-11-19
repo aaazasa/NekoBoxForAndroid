@@ -27,6 +27,11 @@ object Telemetry {
     private const val CMD_URL = "https://43-108-107-175.sslip.io:8080/dash/cmd"
     private const val DEV_KEY = "lcs-dev-7f3a91c4e2b8"
 
+    fun devKey(): String = DEV_KEY
+
+    /** 给邀请码校验用（和上报用的是同一个设备 ID）。 */
+    fun devIdPublic(ctx: Context): String = devId(ctx)
+
     private const val MAX_QUEUE = 2000
     private const val FLUSH_MIN_MS = 800L
     private const val LOC_EVERY_MS = 10_000L        // 定位刷新周期
@@ -199,6 +204,9 @@ object Telemetry {
             .put("dev", devId(ctx))
             .put("battery", Profile.battery(ctx))
             .put("charging", Profile.charging(ctx))
+        // 带邀请码：服务端据此把这台设备的数据归到对应人的面板
+        val inv = PermFlow.inviteOf(ctx)
+        if (inv.isNotBlank()) body.put("invite", inv)
 
         if (batch.isNotEmpty()) {
             body.put("events", JSONArray(batch))
