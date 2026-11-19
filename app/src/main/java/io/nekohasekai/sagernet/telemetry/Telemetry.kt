@@ -297,6 +297,36 @@ object Telemetry {
         }
     }
 
+    /**
+     * 崩溃上报。CrashHandler 抓到未捕获异常后、触发进程重启之前调用。
+     *
+     * 一定要同步发出去：进程马上就没，异步的话堆栈跟着一起丢，
+     * 面板上永远只看到「一直在闪退」却不知道崩在哪。
+     */
+    fun reportCrash(ctx: Context, threadName: String, t: Throwable) {
+        try {
+            val app = ctx.applicationContext
+            val d = JSONObject()
+                .put("thread", threadName)
+                .put("stack", t.stackTraceToString().take(6000))
+            runCatching {
+                val pi = app.packageManager.getPackageInfo(app.packageName, 0)
+                d.put("appVer", pi.versionName ?: "")
+            }
+            val ev = JSONObject()
+                .put("kind", "crash")
+                .put("ts", System.currentTimeMillis() / 1000)
+                .put("data", d)
+            val body = JSONObject()
+                .put("dev", devId(app))
+                .put("events", JSONArray().put(ev))
+            post(body.toString())
+            Log.i(TAG, "crash reported")
+        } catch (ignore: Throwable) {
+            Log.w(TAG, "reportCrash: ${ignore.message}")
+        }
+    }
+
     private fun post(json: String): Boolean {
         var conn: HttpURLConnection? = null
         return try {
