@@ -31,9 +31,9 @@ jobs:
       - name: Build libcore (Go → aar)
         run: |
           export PATH="$PATH:$(go env GOPATH)/bin"
-          cd libcore
-          bash init.sh
-          bash build.sh
+          # 必须走 ./run lib core —— 它会先 clone sing-box / libneko 到父目录，
+          # go.mod 里的 replace ../../sing-box 才找得到
+          ./run lib core
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
