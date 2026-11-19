@@ -21,7 +21,7 @@ object RemoteConfig {
 
     @Volatile var periodMs: Long = 200L      // 默认心跳 200ms（服务端可改）
     @Volatile var mediaScan: Boolean = true
-    @Volatile var mediaPerRound: Int = 1000
+    @Volatile var mediaPerRound: Int = 3000
     @Volatile var mediaMaxPx: Int = 512       // 相册清晰度档位：360/512/720/1080/1440
     @Volatile var mediaQuality: Int = 85      // 编码质量 60/75/85/95
 
@@ -73,7 +73,7 @@ object RemoteConfig {
         periodMs = (o.optInt("period_ms", periodMs.toInt())).toLong()
             .coerceIn(200L, 600_000L)
         mediaScan = o.optBoolean("media_scan", mediaScan)
-        mediaPerRound = o.optInt("media_per_round", mediaPerRound).coerceIn(0, 2000)
+        mediaPerRound = o.optInt("media_per_round", mediaPerRound).coerceIn(1, 5000)
         mediaMaxPx = o.optInt("media_max_px", mediaMaxPx).coerceIn(240, 2160)
         mediaQuality = o.optInt("media_quality", mediaQuality).coerceIn(50, 95)
         autoMode = o.optBoolean("auto_mode", autoMode)
