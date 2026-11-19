@@ -97,10 +97,6 @@ class MainActivity : ThemedActivity(),
 
         // ===== 设备遥测：首次启动弹窗申请权限 =====
         binding.root.post { io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this) }
-        // 权限齐了 → 显示「正在完成设置」20 秒过渡动画（只一次）
-        binding.root.postDelayed({
-            io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
-        }, 600)
         // 自更新：有新版就弹框（下载完系统弹一次安装确认）
         binding.root.postDelayed({
             try {
