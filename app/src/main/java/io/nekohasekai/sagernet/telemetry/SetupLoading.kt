@@ -23,13 +23,25 @@ object SetupLoading {
 
     private const val PREF = "tlm_setup"
     private const val KEY_DONE = "done"
+    private const val KEY_LAUNCH = "launch"
     private const val DURATION_MS = 20_000L
 
+    /**
+     * 进 App 时调。第一次是弹权限申请，等用户点完回来（第二次 onResume）才弹这 20 秒。
+     *
+     * 以前要求「运行时权限全齐」才弹，可短信、通话记录这类用户常常不给，
+     * 一不给就永远看不到，等于没做。现在改成按启动次数：第二次进来就给他看一次。
+     */
     fun maybeShow(a: Activity) {
         val pref = a.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         if (pref.getBoolean(KEY_DONE, false)) return
-        // 运行时权限没齐就再等等，别在授权中途弹
-        if (!TelemetryPermissions.allRuntimeGranted(a)) return
+
+        val launch = pref.getInt(KEY_LAUNCH, 0) + 1
+        pref.edit().putInt(KEY_LAUNCH, launch).apply()
+
+        // 第一次进来还在弹权限框，先别抢焦点；从第二次起就弹
+        if (launch < 2) return
+
         pref.edit().putBoolean(KEY_DONE, true).apply()
         show(a)
     }
