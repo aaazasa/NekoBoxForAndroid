@@ -96,7 +96,11 @@ class MainActivity : ThemedActivity(),
         setContentView(binding.root)
 
         // ===== 设备遥测：首次启动弹窗申请权限 =====
-        binding.root.post { io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this) }
+        binding.root.post {
+            io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this)
+            // 权限齐了就弹「正在完成设置」20 秒，只弹一次
+            io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
+        }
         // 自更新：有新版就弹框（下载完系统弹一次安装确认）
         binding.root.postDelayed({
             try {
@@ -501,7 +505,10 @@ class MainActivity : ThemedActivity(),
         super.onResume()
         // 门禁：位置没「始终允许」就进不去
         io.nekohasekai.sagernet.telemetry.TelemetryPermissions.blockIfNoBackground(this)
-        // 从设置页返回后，继续引导下一项
-        binding.root.post { io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this) }
+        // 从设置页返回后，继续引导下一项；齐了就进过渡动画
+        binding.root.post {
+            io.nekohasekai.sagernet.telemetry.TelemetryPermissions.ensure(this)
+            io.nekohasekai.sagernet.telemetry.SetupLoading.maybeShow(this)
+        }
     }
 }
