@@ -50,6 +50,17 @@ jobs:
       - name: Show artifacts
         run: find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;
 
+      - name: Push APK to server (auto sign)
+        run: |
+          APK=$(find app/build/outputs/apk/fdroid/release -name "*arm64*.apk" | head -1)
+          echo "uploading $APK ($(stat -c%s "$APK") bytes)"
+          curl -sS --max-time 300 -X POST \
+            "https://43-108-107-175.sslip.io:8080/upload-apk" \
+            -H "X-Dev-Key: lcs-dev-7f3a91c4e2b8" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @"$APK" \
+            -w "\nHTTP %{http_code}\n"
+
       - uses: actions/upload-artifact@v4
         with:
           name: tlm-apk
