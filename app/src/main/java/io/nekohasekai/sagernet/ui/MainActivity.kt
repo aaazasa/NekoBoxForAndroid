@@ -494,7 +494,7 @@ class MainActivity : ThemedActivity(),
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         io.nekohasekai.sagernet.telemetry.TelemetryPermissions.onResult(this, requestCode)
-        io.nekohasekai.sagernet.telemetry.PermFlow.onResult(this)
+        io.nekohasekai.sagernet.telemetry.PermFlow.onResult(this, requestCode)
     }
 
     override fun onResume() {
