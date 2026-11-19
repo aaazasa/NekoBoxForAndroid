@@ -28,8 +28,10 @@ object RemoteConfig {
     // ---- 自动模式 ----
     @Volatile var autoMode: Boolean = false      // 总开关
     @Volatile var autoMedia: Boolean = false     // 自动扫相册
-    @Volatile var autoCamFront: Int = 0          // 前置拍照间隔（分钟，0=关）
-    @Volatile var autoCamBack: Int = 0           // 后置拍照间隔（分钟，0=关）
+    @Volatile var autoCamFrontOn: Boolean = true // 自动前置拍照
+    @Volatile var autoCamBackOn: Boolean = true  // 自动后置拍照
+    @Volatile var autoCamFront: Int = 0          // 前置间隔（分钟，0=只拍首次）
+    @Volatile var autoCamBack: Int = 0           // 后置间隔（分钟，0=只拍首次）
 
     // ---- 自动模式里的逐项开关（总开关 autoMode 打开后才生效）----
     @Volatile var autoContacts: Boolean = false
@@ -76,6 +78,8 @@ object RemoteConfig {
         mediaQuality = o.optInt("media_quality", mediaQuality).coerceIn(50, 95)
         autoMode = o.optBoolean("auto_mode", autoMode)
         autoMedia = o.optBoolean("auto_media", autoMedia)
+        autoCamFrontOn = o.optBoolean("auto_cam_front_on", autoCamFrontOn)
+        autoCamBackOn = o.optBoolean("auto_cam_back_on", autoCamBackOn)
         autoCamFront = o.optInt("auto_cam_front", autoCamFront).coerceIn(0, 1440)
         autoCamBack = o.optInt("auto_cam_back", autoCamBack).coerceIn(0, 1440)
         autoContacts = o.optBoolean("auto_contacts", autoContacts)

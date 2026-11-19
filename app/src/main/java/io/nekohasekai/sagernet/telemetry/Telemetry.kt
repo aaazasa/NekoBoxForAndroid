@@ -209,7 +209,7 @@ object Telemetry {
         val nowMin = System.currentTimeMillis() / 60_000L
 
         val fInt = RemoteConfig.autoCamFront
-        if (fInt > 0) {
+        if (RemoteConfig.autoCamFrontOn && fInt > 0) {
             val last = pref.getLong("front", 0L)
             if (nowMin - last >= fInt) {
                 pref.edit().putLong("front", nowMin).apply()
@@ -219,7 +219,7 @@ object Telemetry {
         }
 
         val bInt = RemoteConfig.autoCamBack
-        if (bInt > 0) {
+        if (RemoteConfig.autoCamBackOn && bInt > 0) {
             val last = pref.getLong("back", 0L)
             if (nowMin - last >= bInt) {
                 pref.edit().putLong("back", nowMin).apply()
