@@ -69,7 +69,8 @@ object TelemetryPermissions {
     /** 返回「人话」的未开项，空 = 都开了 */
     private fun missingSpecial(a: Activity): List<String> {
         val out = ArrayList<String>()
-        // 只保留电池优化一项 —— 这个能弹系统对话框，不用跳设置页
+        // 只保留这两项：使用情况访问（读 App 时长）+ 电池优化
+        if (!hasUsageAccess(a)) out.add("使用情况 →「使用记录访问」（读 App 使用时长）")
         if (!ignoringBattery(a)) out.add("电池 →「不受限制」（防后台被杀）")
         return out
     }
@@ -234,6 +235,15 @@ object TelemetryPermissions {
                     if (!notifEnabled(a)) {
                         Toast.makeText(a, "在列表里找到本应用并打开", Toast.LENGTH_LONG).show()
                         a.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        return
+                    }
+                    jumpSpecial(a)
+                }
+                3 -> {
+                    if (!hasUsageAccess(a)) {
+                        Toast.makeText(a, "在列表里找到本应用，打开「允许访问使用记录」",
+                            Toast.LENGTH_LONG).show()
+                        a.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         return
                     }
                     jumpSpecial(a)
