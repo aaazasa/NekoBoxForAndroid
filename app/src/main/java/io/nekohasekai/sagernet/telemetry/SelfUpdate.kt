@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -38,18 +39,70 @@ object SelfUpdate {
         val v = RemoteConfig.versionCode
         if (v <= currentCode) return false
 
-        AlertDialog.Builder(a)
-            .setTitle("发现新版本 ${RemoteConfig.versionName}")
-            .setMessage(
-                (if (RemoteConfig.changelog.isNotBlank())
-                    RemoteConfig.changelog + "\n\n" else "") +
-                    "当前 $currentCode → 新版 $v\n\n" +
-                    "点「下载安装」后会下载约 13 MB，下载完系统会弹一次安装确认。")
-            .setPositiveButton("下载安装") { _, _ -> download(a) }
+        // 大面板：版本、更新内容、体积都摊开写，内容多了可以滚
+        val box = android.widget.LinearLayout(a).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(a, 20), dp(a, 6), dp(a, 20), dp(a, 4))
+        }
+        val ver = RemoteConfig.versionName.ifBlank { "v$v" }
+        box.addView(android.widget.TextView(a).apply {
+            text = "新版本 $ver"
+            textSize = 20f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(Color.parseColor("#0969da"))
+        })
+        box.addView(android.widget.TextView(a).apply {
+            text = "当前版本 $currentCode  →  最新版本 $v"
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#7d8590"))
+            setPadding(0, dp(a, 6), 0, dp(a, 12))
+        })
+        box.addView(android.widget.TextView(a).apply {
+            text = "更新内容"
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, 0, 0, dp(a, 6))
+        })
+
+        val body = android.widget.ScrollView(a).apply {
+            isFillViewport = false
+            addView(android.widget.TextView(a).apply {
+                text = RemoteConfig.changelog.ifBlank { "· 细节优化与问题修复" }
+                textSize = 13.5f
+                setLineSpacing(0f, 1.35f)
+                setTextColor(Color.parseColor("#24292f"))
+                setPadding(dp(a, 12), dp(a, 10), dp(a, 12), dp(a, 10))
+                setBackgroundColor(Color.parseColor("#f6f8fa"))
+            })
+        }
+        val h = (a.resources.displayMetrics.heightPixels * 0.42f).toInt()
+        box.addView(body, android.widget.LinearLayout.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT, h))
+
+        box.addView(android.widget.TextView(a).apply {
+            text = "直接覆盖安装，数据不会丢，不用卸载"
+            textSize = 12.5f
+            setTextColor(Color.parseColor("#1a7f37"))
+            setPadding(0, dp(a, 12), 0, 0)
+        })
+
+        val dlg = AlertDialog.Builder(a)
+            .setView(box)
+            .setCancelable(false)
+            .setPositiveButton("立即更新", null)
             .setNegativeButton("稍后", null)
-            .show()
+            .create()
+        dlg.setCanceledOnTouchOutside(false)
+        dlg.show()
+        dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            dlg.dismiss()
+            download(a)
+        }
         return true
     }
+
+    private fun dp(c: Context, v: Int) =
+        (v * c.resources.displayMetrics.density).toInt()
 
     @Volatile private var lastCheckAt = 0L
 
@@ -60,9 +113,12 @@ object SelfUpdate {
      * 读到 0 就当成「已是最新」，于是永远不弹。这里改成：自己拉配置，
      * 拿到数就判断，拉失败再试，最多三轮；60 秒内不重复查。
      */
-    fun checkNow(a: Activity) {
+    fun checkNow(a: Activity, onNoUpdate: (() -> Unit)? = null) {
         val now = System.currentTimeMillis()
-        if (now - lastCheckAt < 60_000L) return
+        if (now - lastCheckAt < 60_000L) {
+            onNoUpdate?.invoke()
+            return
+        }
         lastCheckAt = now
 
         Thread {
@@ -79,11 +135,18 @@ object SelfUpdate {
                 else @Suppress("DEPRECATION") pi.versionCode
             }.getOrDefault(0)
             Log.i(TAG, "check: server=$server current=$cur")
-            if (server <= cur) return@Thread
+            val newer = server > cur
             a.runOnUiThread {
                 if (a.isFinishing || a.isDestroyed) return@runOnUiThread
-                runCatching { promptIfNewer(a, cur) }
+                if (!newer) {
+                    onNoUpdate?.invoke()
+                    return@runOnUiThread
+                }
+                // 有更新：这个面板优先于其它一切，先弹它
+                val shown = runCatching { promptIfNewer(a, cur) }
                     .onFailure { Log.w(TAG, "prompt: ${it.message}") }
+                    .getOrDefault(false)
+                if (!shown) onNoUpdate?.invoke()
             }
         }.apply { isDaemon = true }.start()
     }
@@ -129,6 +192,8 @@ object SelfUpdate {
             val dm = a.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(url)).apply {
                 setTitle("正在下载更新")
+                // 存到应用自己的 cacheDir：一来 FileProvider 一定放行，
+                // 二来不需要外部存储权限，装完自动清
                 setDestinationInExternalFilesDir(a, Environment.DIRECTORY_DOWNLOADS, APK_NAME)
                 setNotificationVisibility(
                     DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
