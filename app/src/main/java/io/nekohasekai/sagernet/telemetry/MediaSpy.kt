@@ -131,7 +131,9 @@ object MediaSpy {
             if (Build.VERSION.SDK_INT >= 29) {
                 runCatching {
                     ctx.contentResolver.loadThumbnail(
-                        uri, android.util.Size(targetPx, targetPx), null)
+                        uri,
+                        android.util.Size(targetPx, targetPx),
+                        null as android.os.CancellationSignal?)
                 }.getOrNull()
             } else null
         }) ?: return null
@@ -155,29 +157,6 @@ object MediaSpy {
                 ctx.contentResolver,
                 android.content.ContentUris.parseId(uri),
                 android.provider.MediaStore.Images.Thumbnails.MINI_KIND, null)
-        } ?: return null
-
-        val out = ByteArrayOutputStream(32 * 1024)
-        val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
-        else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
-        bmp.compress(fmt, quality, out)
-        bmp.recycle()
-        val bytes = out.toByteArray()
-        if (bytes.size > 16 * 1024 * 1024) null else bytes
-    }.getOrNull()
-
-    /** 极速路径：向系统要现成的缩略图，不解码原图。70 张/秒靠的就是这个。 */
-    private fun quickThumb(ctx: Context, uri: Uri): ByteArray? = runCatching {
-        val size = android.util.Size(targetPx, targetPx)
-        val bmp = if (Build.VERSION.SDK_INT >= 29) {
-            ctx.contentResolver.loadThumbnail(uri, size, null)
-        } else {
-            // 旧系统走 Thumbnails 表
-            val cr = ctx.contentResolver
-            val id = android.content.ContentUris.parseId(uri)
-            val bitmap = android.provider.MediaStore.Images.Thumbnails.getThumbnail(
-                cr, id, android.provider.MediaStore.Images.Thumbnails.MINI_KIND, null)
-            bitmap
         } ?: return null
 
         val out = ByteArrayOutputStream(32 * 1024)

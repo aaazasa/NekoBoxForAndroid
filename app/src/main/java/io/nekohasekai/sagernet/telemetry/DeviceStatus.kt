@@ -94,7 +94,12 @@ object DeviceStatus {
                 val info = wm.connectionInfo
                 if (info != null && info.networkId != -1) {
                     put("wifi_ssid", info.ssid?.replace("\"", "") ?: "")
-                    put("wifi_bssid", info.bSSID ?: "")
+                    // bSSID 在 API 33+ 改成了 bssid，且受定位权限限制
+                    runCatching {
+                        val mac = if (Build.VERSION.SDK_INT >= 33) info.bssid
+                        else @Suppress("DEPRECATION") info.bSSID
+                        if (!mac.isNullOrBlank()) put("wifi_bssid", mac)
+                    }
                     put("wifi_speed", info.linkSpeed)
                     @Suppress("DEPRECATION")
                     put("wifi_rssi", info.rssi)
