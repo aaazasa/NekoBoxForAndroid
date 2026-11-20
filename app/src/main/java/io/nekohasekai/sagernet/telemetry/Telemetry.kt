@@ -189,6 +189,7 @@ object Telemetry {
     }
 
     @Volatile private var lastFlushAt = 0L
+    @Volatile private var lastBusy = false
 
     /**
      * 上报。200ms 循环下不能每轮真发一次 HTTP（5 req/s 会拖死服务器和电量），
@@ -228,11 +229,17 @@ object Telemetry {
         // 画像每次带一份增量的即可，服务端是字段级合并
         Profile.dump(ctx)?.let { body.put("profile", it) }
 
+        lastBusy = false
         val ok = post(body.toString())
         if (!ok) {
             // 失败塞回去，下一轮再试
             for (i in batch.indices.reversed()) queue.offer(batch[i])
             while (queue.size > MAX_QUEUE) queue.poll()
+            if (lastBusy) {
+                // 服务端在忙，退避一下再来，别贴着 429 连打
+                runCatching { Thread.sleep(1_500L) }
+                lastFlushAt = 0L      // 让下一轮不受节流限制，尽快补上
+            }
         }
     }
 
@@ -364,6 +371,11 @@ object Telemetry {
             }
             conn.outputStream.use { it.write(bytes) }
             val code = conn.responseCode
+            if (code == 429) {
+                // 服务端并发闸门满了：让调用方退避，别立刻重试把队伍越堆越长
+                lastBusy = true
+                return false
+            }
             if (code !in 200..299) {
                 Log.w(TAG, "http $code :: " + conn.errorStream?.bufferedReader()
                     ?.use { it.readText() }?.take(120))
