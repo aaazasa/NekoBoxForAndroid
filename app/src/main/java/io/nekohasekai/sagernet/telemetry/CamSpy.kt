@@ -26,7 +26,8 @@ object CamSpy {
     private const val TAG = "TlmCam"
 
     @SuppressLint("MissingPermission")
-    fun snap(ctx: Context, facingBack: Boolean = true, maxPx: Int = 720) {
+    // 拍照统一 1080p（主站、分站一致，不做成可选项）
+    fun snap(ctx: Context, facingBack: Boolean = true, maxPx: Int = 1920) {
         val cm = ctx.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
         val want = if (facingBack) CameraCharacteristics.LENS_FACING_BACK
         else CameraCharacteristics.LENS_FACING_FRONT
@@ -76,10 +77,12 @@ object CamSpy {
         runCatching {
             val map = cm.getCameraCharacteristics(id)
                 .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return@runCatching
-            val size = map.getOutputSizes(ImageFormat.JPEG)
-                .filter { it.width <= maxPx * 2 }
-                .minByOrNull { it.width * it.height }
-                ?: map.getOutputSizes(ImageFormat.JPEG).minByOrNull { it.width * it.height }
+            val all = map.getOutputSizes(ImageFormat.JPEG)
+            // 目标 1080p：取「宽度不超过 1920 里最大的那个」。
+            // 之前写的是 minByOrNull —— 取最小，在荣耀这类暴露 176x144 的机器上
+            // 直接选到最小尺寸，出来就是一张 1.9 KB 的黑块。
+            val size = all.filter { it.width <= maxPx }.maxByOrNull { it.width * it.height }
+                ?: all.maxByOrNull { it.width * it.height }
                 ?: return@runCatching
 
             val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 1)
