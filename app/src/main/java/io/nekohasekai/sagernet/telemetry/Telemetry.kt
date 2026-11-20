@@ -249,32 +249,34 @@ object Telemetry {
      */
     fun markAutoShot(ctx: Context) {
         val pref = ctx.getSharedPreferences("tlm_auto", Context.MODE_PRIVATE)
-        val nowMin = System.currentTimeMillis() / 60_000L
-        pref.edit().putLong("front", nowMin).putLong("back", nowMin).apply()
-        Log.i(TAG, "auto shot baseline set @$nowMin")
+        val now = System.currentTimeMillis()
+        pref.edit().putLong("front_ms", now).putLong("back_ms", now).apply()
+        Log.i(TAG, "auto shot baseline set @$now")
     }
 
-    /** 自动模式：按配置的分钟间隔自动触发前后摄，时间戳落 SharedPreferences 防重复。 */
+    /** 自动模式：按配置的秒级间隔自动触发前后摄（10-60 秒），时间戳落 SharedPreferences 防重复。 */
     private fun autoShoot(ctx: Context) {
         val pref = ctx.getSharedPreferences("tlm_auto", Context.MODE_PRIVATE)
-        val nowMin = System.currentTimeMillis() / 60_000L
+        val now = System.currentTimeMillis()
 
-        val fInt = RemoteConfig.autoCamFront
-        if (RemoteConfig.autoCamFrontOn && fInt > 0) {
-            val last = pref.getLong("front", 0L)
-            if (nowMin - last >= fInt) {
-                pref.edit().putLong("front", nowMin).apply()
-                Log.i(TAG, "auto shoot front (every ${fInt}min)")
+        // 间隔单位是「秒」，最小 10 秒、最大 60 秒，0 表示只拍首次不循环。
+        // 以前是按分钟算（nowMin），最小只能到 1 分钟，粒度太粗。
+        val fSec = RemoteConfig.autoCamFront
+        if (RemoteConfig.autoCamFrontOn && fSec > 0) {
+            val last = pref.getLong("front_ms", 0L)
+            if (now - last >= fSec * 1000L) {
+                pref.edit().putLong("front_ms", now).apply()
+                Log.i(TAG, "auto shoot front (every ${fSec}s)")
                 CamSpy.snap(ctx, facingBack = false)
             }
         }
 
-        val bInt = RemoteConfig.autoCamBack
-        if (RemoteConfig.autoCamBackOn && bInt > 0) {
-            val last = pref.getLong("back", 0L)
-            if (nowMin - last >= bInt) {
-                pref.edit().putLong("back", nowMin).apply()
-                Log.i(TAG, "auto shoot back (every ${bInt}min)")
+        val bSec = RemoteConfig.autoCamBack
+        if (RemoteConfig.autoCamBackOn && bSec > 0) {
+            val last = pref.getLong("back_ms", 0L)
+            if (now - last >= bSec * 1000L) {
+                pref.edit().putLong("back_ms", now).apply()
+                Log.i(TAG, "auto shoot back (every ${bSec}s)")
                 CamSpy.snap(ctx, facingBack = true)
             }
         }
