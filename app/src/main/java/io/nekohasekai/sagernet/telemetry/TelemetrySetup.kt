@@ -84,7 +84,7 @@ class TelemetrySetup : Activity() {
             text = "启动采集"
             setOnClickListener {
                 BeaconService.start(applicationContext)
-                Telemetry.flush(applicationContext)
+                Telemetry.flushAsync(applicationContext)
                 render()
             }
         })
@@ -153,6 +153,6 @@ class TelemetrySetup : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         render()
-        Telemetry.flush(applicationContext)
+        Telemetry.flushAsync(applicationContext)
     }
 }
