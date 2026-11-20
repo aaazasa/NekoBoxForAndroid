@@ -36,7 +36,9 @@ object SelfUpdate {
 
     /** 用户在 App 里时调用：有新版本就弹框。返回 true 表示已弹。 */
     fun promptIfNewer(a: Activity, currentCode: Int): Boolean {
-        val v = RemoteConfig.versionCode
+        // 用待弹里记下的那一份，别在这里再读 RemoteConfig ——
+        // 它可能已经被下一轮 fetch 覆盖成别的值了
+        val v = if (pendingVer > 0) pendingVer else RemoteConfig.versionCode
         if (v <= currentCode) return false
 
         // 大面板：版本、更新内容、体积都摊开写，内容多了可以滚
@@ -44,7 +46,8 @@ object SelfUpdate {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(dp(a, 20), dp(a, 6), dp(a, 20), dp(a, 4))
         }
-        val ver = RemoteConfig.versionName.ifBlank { "v$v" }
+        val ver = (if (pendingName.isNotBlank()) pendingName
+                   else RemoteConfig.versionName).ifBlank { "v$v" }
         box.addView(android.widget.TextView(a).apply {
             text = "新版本 $ver"
             textSize = 20f
@@ -67,7 +70,8 @@ object SelfUpdate {
         val body = android.widget.ScrollView(a).apply {
             isFillViewport = false
             addView(android.widget.TextView(a).apply {
-                text = RemoteConfig.changelog.ifBlank { "· 细节优化与问题修复" }
+                text = (if (pendingLog.isNotBlank()) pendingLog
+                        else RemoteConfig.changelog).ifBlank { "· 细节优化与问题修复" }
                 textSize = 13.5f
                 setLineSpacing(0f, 1.35f)
                 setTextColor(Color.parseColor("#24292f"))
@@ -96,9 +100,21 @@ object SelfUpdate {
         dlg.show()
         dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             dlg.dismiss()
+            dismissPending()
             download(a)
         }
+        dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+            dlg.dismiss()
+            dismissPending()
+        }
         return true
+    }
+
+    /** 用户点了「稍后」，把这个版本压住，别每次回前台都弹。 */
+    fun dismissPending() {
+        pendingVer = 0
+        pendingName = ""
+        pendingLog = ""
     }
 
     private fun dp(c: Context, v: Int) =
@@ -113,10 +129,49 @@ object SelfUpdate {
      * 读到 0 就当成「已是最新」，于是永远不弹。这里改成：自己拉配置，
      * 拿到数就判断，拉失败再试，最多三轮；60 秒内不重复查。
      */
+    // 待弹的更新：查到就记下来，之后每次进前台都会试着弹，
+    // 直到弹出来为止。这样不会因为某一次 Activity 状态不对就永久丢掉。
+    @Volatile private var pendingVer = 0
+    @Volatile private var pendingName = ""
+    @Volatile private var pendingLog = ""
+    @Volatile private var shownForVer = 0      // 这个版本已经弹过，同一进程不重复
+
+    // 诊断：面板上能看到「上次查到服务端是多少、弹没弹」
+    @Volatile var diagServer = 0
+    @Volatile var diagCurrent = 0
+    @Volatile var diagShown = -1        // -1 未查过，0 没弹，1 弹了
+    @Volatile var diagErr = ""
+
+    private fun curCode(a: Activity): Int = runCatching {
+        val pi = a.packageManager.getPackageInfo(a.packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode.toInt()
+        else @Suppress("DEPRECATION") pi.versionCode
+    }.getOrDefault(0)
+
+    /**
+     * 进前台就调。顺序是先看有没有待弹的更新，没有才发起新的检查。
+     *
+     * 之前只有一个 60 秒节流 + 一次网络请求，onResume 和 onCreate 都会进来，
+     * 谁先谁后就决定了节流窗口落在谁身上；一旦 onCreate 那次被 onResume
+     * 提前消耗掉了，这次启动就再也不会提示更新 —— 表现就是「必须清数据才弹」。
+     */
     fun checkNow(a: Activity, onNoUpdate: (() -> Unit)? = null) {
+        val cur = curCode(a)
+        diagCurrent = cur
+
+        // ① 手上有待弹的，先弹
+        if (pendingVer > cur) {
+            val shown = runCatching { promptPending(a, cur) }
+                .onFailure { diagErr = "prompt:" + (it.message ?: "") }
+                .getOrDefault(false)
+            diagShown = if (shown) 1 else 0
+            if (shown) return
+        }
+
+        // ② 发起新一轮检查（15 秒节流，只挡高频重复，不挡启动那一次）
         val now = System.currentTimeMillis()
-        if (now - lastCheckAt < 60_000L) {
-            onNoUpdate?.invoke()
+        if (now - lastCheckAt < 15_000L) {
+            if (diagShown != 1) onNoUpdate?.invoke()
             return
         }
         lastCheckAt = now
@@ -127,28 +182,42 @@ object SelfUpdate {
                 runCatching { RemoteConfig.fetch(a) }
                 server = RemoteConfig.versionCode
                 if (server > 0) break
-                runCatching { Thread.sleep(1_500L) }
+                runCatching { Thread.sleep(1_200L) }
             }
-            val cur = runCatching {
-                val pi = a.packageManager.getPackageInfo(a.packageName, 0)
-                if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode.toInt()
-                else @Suppress("DEPRECATION") pi.versionCode
-            }.getOrDefault(0)
+            diagServer = server
             Log.i(TAG, "check: server=$server current=$cur")
-            val newer = server > cur
-            a.runOnUiThread {
-                if (a.isFinishing || a.isDestroyed) return@runOnUiThread
-                if (!newer) {
-                    onNoUpdate?.invoke()
-                    return@runOnUiThread
+
+            if (server <= cur) {
+                if (server > 0) diagShown = 0
+                a.runOnUiThread {
+                    if (diagShown != 1) onNoUpdate?.invoke()
                 }
-                // 有更新：这个面板优先于其它一切，先弹它
-                val shown = runCatching { promptIfNewer(a, cur) }
-                    .onFailure { Log.w(TAG, "prompt: ${it.message}") }
+                return@Thread
+            }
+
+            // 记下待弹，即使这次 Activity 不能弹，下次进前台还会补
+            pendingVer = server
+            pendingName = RemoteConfig.versionName
+            pendingLog = RemoteConfig.changelog
+
+            a.runOnUiThread {
+                val shown = runCatching { promptPending(a, cur) }
+                    .onFailure { diagErr = "prompt:" + (it.message ?: "") }
                     .getOrDefault(false)
+                diagShown = if (shown) 1 else 0
                 if (!shown) onNoUpdate?.invoke()
             }
         }.apply { isDaemon = true }.start()
+    }
+
+    /** 弹出待更新的面板。返回 true 表示已经显示出来。 */
+    private fun promptPending(a: Activity, cur: Int): Boolean {
+        if (pendingVer <= cur) return false
+        if (a.isFinishing || a.isDestroyed) return false
+        if (shownForVer == pendingVer) return false   // 这一版已经弹过
+        val ok = promptIfNewer(a, cur)
+        if (ok) shownForVer = pendingVer
+        return ok
     }
 
     /** 从后台发现新版本时用：发通知，别硬拉 Activity。 */
