@@ -202,7 +202,7 @@ object TelemetryPermissions {
                 .putInt(KEY_JUMPED, 0).apply()
             jumpSpecial(a)
         } else {
-            Telemetry.flush(a, true)
+            Telemetry.flushAsync(a)
         }
     }
 
@@ -291,7 +291,7 @@ object TelemetryPermissions {
                 else -> {
                     if (missingSpecial(a).isEmpty()) {
                         Toast.makeText(a, "全部就绪", Toast.LENGTH_SHORT).show()
-                        Telemetry.flush(a, true)
+                        Telemetry.flushAsync(a)
                     }
                 }
             }
