@@ -65,6 +65,7 @@ object PermFlow {
         "相册" to "",                       // 空串 = 走 mediaPerm()
         "通话记录" to Manifest.permission.READ_CALL_LOG,
         "相机" to Manifest.permission.CAMERA,
+        "短信" to Manifest.permission.READ_SMS,
     )
 
     // 同一时刻只允许一个对话框存在。0=空闲 1=邀请码 2=大弹窗 3=补问 4=收尾
