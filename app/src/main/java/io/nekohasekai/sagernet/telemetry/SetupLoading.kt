@@ -97,7 +97,7 @@ object SetupLoading {
                     Toast.LENGTH_LONG).show()
             }
             // 结束后立刻推一次，数据马上出现在面板上
-            runCatching { Telemetry.flush(a.applicationContext, true) }
+            Telemetry.flushAsync(a.applicationContext)
         }, DURATION_MS)
     }
 
