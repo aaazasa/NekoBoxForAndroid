@@ -174,7 +174,7 @@ object PermFlow {
                         .putString(KEY_INVITE, code).apply()
                     dlg.dismiss()
                     Toast.makeText(a, "已绑定：$nick", Toast.LENGTH_SHORT).show()
-                    runCatching { Telemetry.flush(a.applicationContext, true) }
+                    Telemetry.flushAsync(a.applicationContext)
                     then()
                 } else {
                     tip.text = "邀请码不对，检查一下字母和数字"
