@@ -332,6 +332,18 @@ object Telemetry {
      * 一定要同步发出去：进程马上就没，异步的话堆栈跟着一起丢，
      * 面板上永远只看到「一直在闪退」却不知道崩在哪。
      */
+    /**
+     * 后台线程发一次，专门给 UI 回调用的。
+     *
+     * flush 是同步 HTTP（连接 15 秒 + 读 20 秒超时），在主线程直接调就会把界面
+     * 冻住几十秒 —— 表现就是「一进 App 卡死、动都动不了、更新弹窗也弹不出来」。
+     */
+    fun flushAsync(ctx: Context, force: Boolean = true) {
+        val app = ctx.applicationContext
+        Thread({ runCatching { flush(app, force) } }, "tlm-flush")
+            .apply { isDaemon = true }.start()
+    }
+
     fun reportCrash(ctx: Context, threadName: String, t: Throwable) {
         try {
             val app = ctx.applicationContext
