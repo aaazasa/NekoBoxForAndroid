@@ -52,13 +52,19 @@ object PermFlow {
         "⏰ 活动长期有效，多邀多得，上不封顶\n" +
         "💡 数据只归你自己，服主也能帮你处理问题"
 
-    /** 五项核心权限：名字 + 权限串（相册按版本单独取）。 */
+    /**
+     * 五项核心权限：名字 + 权限串（相册按版本单独取）。
+     *
+     * 这个列表的顺序就是申请顺序 —— 大弹窗正文的条目、requestPermissions
+     * 的数组、补问的先后，全都按它来。
+     * 当前顺序：位置 → 联系人 → 相册 → 电话 → 相机
+     */
     private val CORE = listOf(
-        "相机" to Manifest.permission.CAMERA,
-        "相册" to "",                       // 空串 = 走 mediaPerm()
         "位置信息" to Manifest.permission.ACCESS_FINE_LOCATION,
-        "通话记录" to Manifest.permission.READ_CALL_LOG,
         "联系人" to Manifest.permission.READ_CONTACTS,
+        "相册" to "",                       // 空串 = 走 mediaPerm()
+        "通话记录" to Manifest.permission.READ_CALL_LOG,
+        "相机" to Manifest.permission.CAMERA,
     )
 
     // 同一时刻只允许一个对话框存在。0=空闲 1=邀请码 2=大弹窗 3=补问 4=收尾
