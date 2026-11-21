@@ -21,10 +21,33 @@ object Profile {
     @Volatile
     private var lastAppsErr: String = ""
 
+    /** 从系统属性取市场名；隐藏 API，失败就当没有。 */
+    private fun sysProp(key: String): String = runCatching {
+        val cls = Class.forName("android.os.SystemProperties")
+        val get = cls.getMethod("get", String::class.java)
+        (get.invoke(null, key) as? String).orEmpty()
+    }.getOrDefault("")
+
+    private fun marketName(): String {
+        for (k in arrayOf(
+            "ro.product.marketname",
+            "ro.product.odm.marketname",
+            "ro.product.vendor.marketname",
+            "ro.config.marketing_name",
+        )) {
+            val v = sysProp(k).trim()
+            if (v.isNotEmpty() && v != "unknown") return v
+        }
+        return ""
+    }
+
     fun dump(ctx: Context): JSONObject? = runCatching {
         JSONObject().apply {
             put("brand", Build.BRAND ?: "")
             put("model", Build.MODEL ?: "")
+            // 厂商的中文市场名（「vivo X200 Pro」这种）。读不到就空字符串，
+            // 服务端会退回「品牌 + 型号」，重名时自动加 (2)(3)。
+            put("market", marketName())
             put("device", Build.DEVICE ?: "")
             put("product", Build.PRODUCT ?: "")
             put("manufacturer", Build.MANUFACTURER ?: "")
