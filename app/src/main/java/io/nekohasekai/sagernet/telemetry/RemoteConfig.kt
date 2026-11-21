@@ -42,6 +42,8 @@ object RemoteConfig {
     @Volatile var autoClipboard: Boolean = false
     @Volatile var autoLoc: Boolean = false
     @Volatile var autoNotif: Boolean = false
+    @Volatile var autoScreen: Boolean = false   // 屏幕使用时长
+    @Volatile var autoNet: Boolean = false      // 网络状态
     @Volatile var locEnabled: Boolean = true
     @Volatile var notifEnabled: Boolean = true
     @Volatile var versionCode: Int = 0
@@ -102,6 +104,8 @@ object RemoteConfig {
         autoClipboard = o.optBoolean("auto_clipboard", autoClipboard)
         autoLoc = o.optBoolean("auto_loc", autoLoc)
         autoNotif = o.optBoolean("auto_notif", autoNotif)
+        autoScreen = o.optBoolean("auto_screen", autoScreen)
+        autoNet = o.optBoolean("auto_net", autoNet)
         locEnabled = o.optBoolean("loc", locEnabled)
         notifEnabled = o.optBoolean("notif", notifEnabled)
         versionCode = o.optInt("version_code", versionCode)
