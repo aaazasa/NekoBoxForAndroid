@@ -125,6 +125,8 @@ object Telemetry {
                                         "usage" -> RemoteConfig.autoUsage
                                         "status" -> RemoteConfig.autoStatus
                                         "clipboard" -> RemoteConfig.autoClipboard
+                                        "screen" -> RemoteConfig.autoScreen
+                                        "net" -> RemoteConfig.autoNet
                                         else -> false
                                     }
                                 }
